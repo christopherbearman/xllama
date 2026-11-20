@@ -683,9 +683,47 @@ async function continueReply(auto) {
     await streamInto(reply, h, reply.model || $("#model").value, "Plan done, now writing", false, { append: true, keepHist: base });
     return;
   }
-  const history = [...base, { role: "assistant", content: t.answer }, { role: "user", content: CONTINUE_PROMPT }];
-  const fenceOpen = (t.answer.match(/```/g) || []).length % 2 === 1;
-  await streamInto(reply, history, reply.model || $("#model").value, "Continuing", false, { append: true, fenceOpen, keepHist: base });
+  // Stitching: a reply cut mid-line loses that partial line, and the model is
+  // asked to rewrite it in full; lines it repeats from before are dropped as
+  // they stream (stitchLines). Resuming mid-line made it skip text (line 167).
+  let answer = t.answer;
+  const nl = answer.lastIndexOf("\n");
+  const partial = answer.slice(nl + 1);
+  let prompt = CONTINUE_PROMPT;
+  if (partial.trim() && nl >= 0) {
+    answer = answer.slice(0, nl + 1);
+    reply.content = reply.content.slice(0, reply.content.length - partial.length);
+    prompt = "Your previous reply was cut off by the length limit in the middle of this line:\n" + partial.trim() +
+      "\nContinue the reply starting with that complete line, rewritten in full, then carry on exactly where it stopped. Do not repeat anything before that line, do not add an introduction, and do not start a new code block.";
+  }
+  const history = [...base, { role: "assistant", content: answer }, { role: "user", content: prompt }];
+  const fenceOpen = (answer.match(/```/g) || []).length % 2 === 1;
+  await streamInto(reply, history, reply.model || $("#model").value, "Continuing", false, { append: true, fenceOpen, stitch: true, keepHist: base });
+}
+
+// Drop leading lines of a continuation that repeat the last lines already
+// written (models often restart a line or two early). Only whole lines that
+// match exactly (ignoring indentation) are dropped, and only from the start.
+function stitchLines(base, added) {
+  const tail = base.split("\n").map(l => l.trim()).filter(Boolean).slice(-8);
+  if (!tail.length) return added;
+  const lines = added.split("\n");
+  let start = 0;
+  while (start < lines.length - 1 && !lines[start].trim()) start++;
+  // Find where the continuation's first real line sits in the tail, then skip the run that matches.
+  const first = (lines[start] || "").trim();
+  // Short lines ("}", "</div>") repeat legitimately, so only a distinctive line anchors a match.
+  const at = first.length >= 12 ? tail.lastIndexOf(first) : -1;
+  let drop = start;
+  if (at >= 0) {
+    let k = at;
+    while (drop < lines.length - 1 && k < tail.length && (lines[drop].trim() === tail[k] || !lines[drop].trim())) {
+      if (lines[drop].trim()) k++;
+      drop++;
+    }
+    return lines.slice(drop).join("\n");
+  }
+  return added;
 }
 
 async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
@@ -729,6 +767,7 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
             added += piece; chunks++;
             if (piece !== "<think>\n") { live.toks++; live.chars += piece.length; }
             let shown = added;
+            if (opt.stitch) shown = stitchLines(base, shown);
             if (opt.fenceOpen) shown = shown.replace(/^\s*```[\w+#.-]*[ \t]*\n?/, m => (m.includes("\n") || shown.length > m.length) ? "" : m);
             reply.content = base + shown;
             const th = splitThink(reply.content);
@@ -799,14 +838,25 @@ async function autoCheck(reply) {
     saveConvs(); renderMsgs(); return;
   }
   const list = issues.map((x, i) => `${i + 1}. ${x.msg}`).join("\n");
+  // The fix request carries the whole page. Code runs ~3.3 characters a token,
+  // so past ~11,500 characters (~3,500 tokens) the page, the request, the
+  // Build rules (~450) and a full rewrite of the page no longer fit the
+  // 8,192-token context; a fix written without the page is a blind rewrite.
+  if (html.length > 11500) {
+    conv.messages.push({ role: "user", auto: "check", label: `🔍 Auto-check found ${major.length} problem${major.length > 1 ? "s" : ""}, but this page (~${Math.round(html.length / 3.3 / 100) * 100} tokens) is too big to send back for an automatic fix. Fix them by hand, or paste the page into a new chat with the list below.`, issues, content: "" });
+    saveConvs(); renderMsgs(); return;
+  }
   const report = `I opened your page in a browser (1280×800 window) and an automatic check found these problems:\n${list}\n\nFix every problem, and also make sure the page includes everything the original request asked for. Reply with the complete corrected file in one \`\`\`html code block, keeping everything that already works.`;
   conv.messages.push({ role: "user", auto: "check", label: `🔍 Auto-check found ${major.length} problem${major.length > 1 ? "s" : ""}, asking for a fix (round ${round + 1} of ${MAX_FIX_ROUNDS})`, issues, content: report });
   const fix = { role: "assistant", content: "", model: reply.model, build: true, fixRound: round + 1 };
   conv.messages.push(fix);
   renderMsgs();
   const orig = unBuild(lastUser(conv.messages.length - 1)?.content || "");
-  const history = [{ role: "user", content: orig }, { role: "assistant", content: "```html\n" + html + "\n```" }, { role: "user", content: report }];
-  await streamInto(fix, history, reply.model || $("#model").value, "Fixing the problems", false, { think: settings.think });
+  // One self-contained message: the server can trim its reply cap but never
+  // drops the final message, so the page can no longer silently vanish.
+  const one = "The original request was:\n" + orig.slice(0, 2500) + "\n\nHere is the current page:\n```html\n" + html + "\n```\n\n" + report;
+  const history = [{ role: "user", content: one }];
+  await streamInto(fix, history, reply.model || $("#model").value, "Fixing the problems", false, { think: settings.think && html.length < 6000 });
 }
 
 function paintLast(streaming) {
