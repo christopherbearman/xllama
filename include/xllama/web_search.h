@@ -16,6 +16,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -27,13 +28,14 @@ struct WebResult {
     std::string snippet;
 };
 
-// "/web <query>" or "/search <query>" (case-insensitive, leading spaces ok).
-// Returns true and sets |query| (trimmed, non-empty) on a match.
-inline bool parse_web_command(const std::string& text, std::string* query) {
+// "<cmd> <rest>" for any of |cmds| (case-insensitive, leading spaces ok).
+// Returns true and sets |rest| (trimmed, non-empty) on a match.
+inline bool parse_slash_command(const std::string& text, std::initializer_list<const char*> cmds,
+                                std::string* query) {
     size_t i = 0;
     while (i < text.size() && std::isspace((unsigned char)text[i]))
         ++i;
-    for (const char* cmd : {"/web", "/search"}) {
+    for (const char* cmd : cmds) {
         const size_t n = std::char_traits<char>::length(cmd);
         if (text.size() < i + n)
             continue;
@@ -58,6 +60,47 @@ inline bool parse_web_command(const std::string& text, std::string* query) {
         return true;
     }
     return false;
+}
+
+// "/web <query>" or "/search <query>".
+inline bool parse_web_command(const std::string& text, std::string* query) {
+    return parse_slash_command(text, {"/web", "/search"}, query);
+}
+
+// "/image <prompt>" or "/img <prompt>" (fork addition): generate a picture.
+inline bool parse_image_command(const std::string& text, std::string* prompt) {
+    return parse_slash_command(text, {"/image", "/img"}, prompt);
+}
+
+// Replace markdown images whose target is a data: URI ("![alt](data:...)")
+// with "[image]". A /image reply embeds a ~1 MB base64 PNG; chat clients send
+// the whole history back on every turn, which would otherwise overflow the
+// model context.
+inline std::string strip_data_uri_images(const std::string& text) {
+    std::string out;
+    size_t pos = 0;
+    while (true) {
+        const size_t bang = text.find("![", pos);
+        if (bang == std::string::npos)
+            break;
+        // The alt text ends at the first "](" after "![": only that link counts.
+        const size_t close = text.find("](", bang + 2);
+        const size_t nl = text.find('\n', bang);
+        if (close == std::string::npos || (nl != std::string::npos && nl < close) ||
+            text.compare(close + 2, 5, "data:") != 0) {
+            out.append(text, pos, bang + 2 - pos);
+            pos = bang + 2;
+            continue;
+        }
+        const size_t end = text.find(')', close + 7);
+        if (end == std::string::npos)
+            break;
+        out.append(text, pos, bang - pos);
+        out += "[image]";
+        pos = end + 1;
+    }
+    out.append(text, pos, std::string::npos);
+    return out;
 }
 
 inline std::string url_encode(const std::string& s) {

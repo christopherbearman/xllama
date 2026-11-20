@@ -141,3 +141,17 @@ TEST_CASE("web search key parsing and Tavily request body") {
           "{\"query\":\"say \\\"hi\\\"\\n\",\"max_results\":5,\"search_depth\":\"basic\","
           "\"include_answer\":false}");
 }
+
+TEST_CASE("image command and data-URI image stripping") {
+    std::string p;
+    CHECK(xllama::parse_image_command("/image a red bus", &p));
+    CHECK(p == "a red bus");
+    CHECK(xllama::parse_image_command("/IMG cat", &p));
+    CHECK_FALSE(xllama::parse_image_command("/imagery of cats", &p));
+    CHECK_FALSE(xllama::parse_web_command("/image a red bus", &p));
+    CHECK(xllama::strip_data_uri_images("before ![bus](data:image/png;base64,AAAA) after") ==
+          "before [image] after");
+    CHECK(xllama::strip_data_uri_images("keep ![x](https://e.com/a.png) and ![y](data:,1)") ==
+          "keep ![x](https://e.com/a.png) and [image]");
+    CHECK(xllama::strip_data_uri_images("no images here") == "no images here");
+}

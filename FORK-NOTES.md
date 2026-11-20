@@ -31,6 +31,15 @@ Not console-benchmarked by upstream.
   `POST /v1/config/web-search {"key": "tvly-..."}` (or `"brave:<key>"`). With
   no key it falls back to Bing RSS, whose results are poor for questions.
 
+## /image command
+
+Start a message with `/image ` (or `/img `) on the console or through
+`/v1/chat/completions` (e.g. Open WebUI) and the console generates a picture
+with LCM DreamShaper v7 (SD-Turbo if LCM is not downloaded). Through the API the
+reply is a markdown image with a `data:` URI, so chat clients show it inline;
+earlier embedded images are replaced with `[image]` in incoming history so they
+do not fill the context. On the console screen, view it with **Image**.
+
 ## Remote diagnostics (LAN API, trusted network only)
 
 | Route                   | What it returns                                        |

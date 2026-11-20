@@ -54,6 +54,7 @@
     #include <climits>
     #include <cstdio>
     #include <cstdlib>
+    #include <cstring>
     #include <ctime>
     #include <exception>
     #include <filesystem>
@@ -204,36 +205,65 @@ std::string debug_status_json() {
            "}";
 }
 
-// Fork addition: "/web <question>" as the last user message runs a web search
-// on the console and replaces that message with numbered results + question.
-// Runs before the compute lease so the fetch never holds the model.
-std::string apply_web_command(const std::string& body) {
+// Fork addition: chat-request preprocessing, before the compute lease (so a
+// web fetch never holds the model):
+//  - markdown images embedded as data: URIs (earlier /image replies) are
+//    replaced with "[image]" in every message, or the history overflows n_ctx;
+//  - a last user message "/image <prompt>" is returned in |image_prompt|;
+//  - a last user message "/web <question>" becomes numbered results + question.
+struct ChatPreprocess {
+    std::string body;
+    std::string image_prompt;
+    std::string model;
+};
+
+ChatPreprocess preprocess_chat_body(const std::string& body) {
+    ChatPreprocess out;
+    out.body = body;
     try {
         JsonObject root{nullptr};
         if (!JsonObject::TryParse(winrt::to_hstring(body), root) || root == nullptr ||
-            !root.HasKey(L"messages"))
-            return body;
+            !root.HasKey(L"messages") ||
+            root.GetNamedValue(L"messages").ValueType() != JsonValueType::Array)
+            return out;
+        out.model = winrt::to_string(root.GetNamedString(L"model", L""));
+        bool changed = false;
         auto msgs = root.GetNamedArray(L"messages");
-        for (int i = (int)msgs.Size() - 1; i >= 0; --i) {
-            auto v = msgs.GetAt((uint32_t)i);
+        int last_user = -1;
+        for (uint32_t i = 0; i < msgs.Size(); ++i) {
+            auto v = msgs.GetAt(i);
             if (v.ValueType() != JsonValueType::Object)
                 continue;
             auto m = v.GetObject();
-            if (m.GetNamedString(L"role", L"") != L"user")
-                continue;
             if (!m.HasKey(L"content") ||
                 m.GetNamedValue(L"content").ValueType() != JsonValueType::String)
-                return body;
-            std::string q;
-            if (!::xllama::parse_web_command(winrt::to_string(m.GetNamedString(L"content")), &q))
-                return body;
-            m.SetNamedValue(L"content", JsonValue::CreateStringValue(winrt::to_hstring(
-                                            ::xllama::uwp::web_search_prompt(q))));
-            return winrt::to_string(root.Stringify());
+                continue;
+            if (m.GetNamedString(L"role", L"") == L"user")
+                last_user = (int)i;
+            const std::string c = winrt::to_string(m.GetNamedString(L"content"));
+            if (c.find("](data:") != std::string::npos) {
+                m.SetNamedValue(L"content", JsonValue::CreateStringValue(winrt::to_hstring(
+                                                ::xllama::strip_data_uri_images(c))));
+                changed = true;
+            }
         }
+        if (last_user >= 0) {
+            auto m = msgs.GetAt((uint32_t)last_user).GetObject();
+            const std::string c = winrt::to_string(m.GetNamedString(L"content"));
+            std::string q;
+            if (::xllama::parse_image_command(c, &q)) {
+                out.image_prompt = q;
+            } else if (::xllama::parse_web_command(c, &q)) {
+                m.SetNamedValue(L"content", JsonValue::CreateStringValue(winrt::to_hstring(
+                                                ::xllama::uwp::web_search_prompt(q))));
+                changed = true;
+            }
+        }
+        if (changed)
+            out.body = winrt::to_string(root.Stringify());
     } catch (...) {
     }
-    return body;
+    return out;
 }
 
 // Xbox blocks binding ports in [57344, 65535] (traffic is silently dropped, per
@@ -2114,6 +2144,96 @@ const char* framing_status(int code) {
     }
 }
 
+// Fork addition: "/image <prompt>" through /v1/chat/completions. Generates a
+// picture (LCM DreamShaper if downloaded, else SD-Turbo) and replies with a
+// chat message whose content is a markdown image with a data: URI, so any
+// OpenAI-style chat client shows it inline.
+void serve_image_chat(StreamSocket const& socket, const std::string& prompt,
+                      const std::string& chat_model, bool stream) {
+    auto compute_permit = acquire_compute_job_or_busy();
+    if (!compute_permit) {
+        activity().busy();
+        write_response(socket, ::xllama::kApiBusyStatus, error_json("busy"));
+        return;
+    }
+    std::unique_lock<std::mutex> lk = acquire_hub_or_busy();
+    if (!lk.owns_lock()) {
+        activity().busy();
+        write_response(socket, ::xllama::kApiBusyStatus, error_json("busy"));
+        return;
+    }
+    auto ticket = activity().begin("images");
+    const std::string lcm_unet =
+        ::xllama::resolve_local_path("models\\lcm-dreamshaper-v7\\unet\\model.onnx");
+    const bool lcm_ready =
+        GetFileAttributesW(::xllama::utf8_to_wstring(lcm_unet).c_str()) != INVALID_FILE_ATTRIBUTES;
+    JsonObject img_req;
+    img_req.Insert(L"model",
+                   JsonValue::CreateStringValue(lcm_ready ? L"lcm-dreamshaper-v7" : L"sd-turbo"));
+    img_req.Insert(L"prompt", JsonValue::CreateStringValue(winrt::to_hstring(prompt)));
+    const char* status = "200 OK";
+    std::string json;
+    try {
+        json = handle_images_locked(winrt::to_string(img_req.Stringify()), status);
+    } catch (...) {
+        status = "500 Internal Server Error";
+        json = error_json("image generation failed");
+    }
+    record_outcome(ticket, status, json);
+    lk.unlock();
+
+    std::string content;
+    try {
+        JsonObject res = JsonObject::Parse(winrt::to_hstring(json));
+        if (std::strcmp(status, "200 OK") == 0 && res.HasKey(L"data")) {
+            const auto b64 = winrt::to_string(
+                res.GetNamedArray(L"data").GetObjectAt(0).GetNamedString(L"b64_json"));
+            std::string alt;
+            for (char c : prompt)
+                if (c != '[' && c != ']' && c != '(' && c != ')' && c != '\n' && c != '\r')
+                    alt.push_back(c);
+            content =
+                "![" + alt + "](data:image/png;base64," + b64 + ")\n\n*Made on the Xbox with " +
+                (lcm_ready ? std::string("LCM DreamShaper v7") : std::string("SD-Turbo")) + ".*";
+        } else {
+            content = "Image generation failed: " + error_text(json);
+        }
+    } catch (...) {
+        content = "Image generation failed (unreadable result).";
+    }
+
+    const std::string model = chat_model.empty() ? std::string("xllama-image") : chat_model;
+    if (stream) {
+        if (write_sse_head(socket) != SseHeadStatus::Written)
+            return;
+        try {
+            SseStream sse(socket, model, nullptr);
+            if (!sse.started())
+                return;
+            sse.write_delta(content);
+            sse.finish(L"stop", 0, 0);
+        } catch (...) {
+        }
+        return;
+    }
+    JsonObject msg;
+    msg.Insert(L"role", JsonValue::CreateStringValue(L"assistant"));
+    msg.Insert(L"content", JsonValue::CreateStringValue(winrt::to_hstring(content)));
+    JsonObject choice;
+    choice.Insert(L"index", JsonValue::CreateNumberValue(0));
+    choice.Insert(L"message", msg);
+    choice.Insert(L"finish_reason", JsonValue::CreateStringValue(L"stop"));
+    JsonArray choices;
+    choices.Append(choice);
+    JsonObject out;
+    out.Insert(L"id", JsonValue::CreateStringValue(L"chatcmpl-xllama-image"));
+    out.Insert(L"object", JsonValue::CreateStringValue(L"chat.completion"));
+    out.Insert(L"created", JsonValue::CreateNumberValue(static_cast<double>(time(nullptr))));
+    out.Insert(L"model", JsonValue::CreateStringValue(winrt::to_hstring(model)));
+    out.Insert(L"choices", choices);
+    write_response(socket, "200 OK", winrt::to_string(out.Stringify()));
+}
+
 // Serve one accepted socket. Runs on a thread-pool work item, never inline
 // in ConnectionReceived: the listener does not raise the next connection
 // until that callback returns, so an in-line SSE reply hid the permit from
@@ -2212,7 +2332,12 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
                 return;
             }
             const bool stream = stream_request == StreamRequest::Yes;
-            const std::string chat_body = apply_web_command(req.body);
+            const ChatPreprocess pre = preprocess_chat_body(req.body);
+            if (!pre.image_prompt.empty()) {
+                serve_image_chat(socket, pre.image_prompt, pre.model, stream);
+                return;
+            }
+            const std::string& chat_body = pre.body;
             auto compute_permit = acquire_compute_job_or_busy();
             if (!compute_permit) {
                 activity().busy();

@@ -3799,6 +3799,38 @@ void MainPageController::OnRunClick(IInspectable const&, RoutedEventArgs const&)
         SetStatus(L"Enter a prompt first");
         return;
     }
+    // Fork addition: "/image <prompt>" generates a picture straight away with
+    // LCM DreamShaper (if downloaded, else SD-Turbo); view it with [*] Image.
+    std::string image_prompt;
+    if (::xllama::parse_image_command(::xllama::wstring_to_utf8(std::wstring(prompt.c_str())),
+                                      &image_prompt)) {
+        if (m_is_running.load() || m_train_running.load() || m_diffuse_running.load()) {
+            SetStatus(L"Busy — wait for the current job to finish", StatusKind::Error);
+            return;
+        }
+        auto compute_permit = ::xllama::try_acquire_compute_job();
+        if (!compute_permit) {
+            SetStatus(L"Busy — another compute job is active", StatusKind::Error);
+            return;
+        }
+        std::error_code ec;
+        const bool lcm_ready =
+            std::filesystem::exists(std::filesystem::path(std::wstring(
+                                        ApplicationData::Current().LocalFolder().Path().c_str())) /
+                                        L"models" / L"lcm-dreamshaper-v7" / L"unet" / L"model.onnx",
+                                    ec);
+        const uint32_t seed = static_cast<uint32_t>(GetTickCount64() % 1'000'000'000ULL) + 1;
+        m_last_diffuse_seed = seed;
+        write_local_bytes(L"prompt.txt", image_prompt);
+        write_local_bytes(L"diffuse-steps.txt", lcm_ready ? "4" : "1");
+        write_local_bytes(L"diffuse-seed.txt", std::to_string(seed));
+        write_local_bytes(L"diffuse-model.txt", lcm_ready ? std::string("lcm-dreamshaper-v7")
+                                                          : std::string("sd-turbo-fp16"));
+        write_local_bytes(L"diffuse-guidance.txt", "8");
+        m_promptInput.Text(L"");
+        StartDiffusion(std::move(compute_permit));
+        return;
+    }
     // Fork addition: "/web <question>" searches the web first (worker thread),
     // then runs the turn with the numbered results in front of the question.
     std::string web_query;
