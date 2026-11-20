@@ -219,7 +219,7 @@ inline WebSearchConfig parse_web_search_key(std::string text) {
 }
 
 // Minimal JSON string escape for request bodies.
-inline std::string json_escape(const std::string& s) {
+inline std::string web_json_escape(const std::string& s) {
     std::string out;
     for (unsigned char c : s) {
         switch (c) {
@@ -252,7 +252,7 @@ inline std::string json_escape(const std::string& s) {
 }
 
 inline std::string tavily_request_json(const std::string& query, int max_results) {
-    return "{\"query\":\"" + json_escape(query) +
+    return "{\"query\":\"" + web_json_escape(query) +
            "\",\"max_results\":" + std::to_string(max_results) +
            ",\"search_depth\":\"basic\",\"include_answer\":false}";
 }
