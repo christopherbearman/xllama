@@ -244,7 +244,11 @@ Rules:
 - Keep everything inside the visible page: no negative offsets that push content off screen, no fixed widths wider than the screen. Make it responsive.
 - Draw scenes back to front: background first, then large objects, then details on top, and make sure the main subject is not hidden behind anything else.
 - Every CSS class you style must exist in the HTML with exactly the same name.
-- No external images; use SVG or CSS. Use realistic text, never lorem ipsum.`;
+- Math.sin and Math.cos take radians: always convert with degrees * Math.PI / 180. Clock angles: hours 30° each, minutes and seconds 6° each, measured clockwise from 12 o'clock.
+- Set SVG attributes with element.setAttribute(name, value). Never use setAttributeNS for ordinary attributes such as transform, x, y or fill.
+- A clock needs hour, minute and second hands that all turn, and numerals placed evenly around the dial.
+- No external images; use SVG or CSS. Use realistic text, never lorem ipsum.
+- Before finishing, check that every part the request mentions is actually on the page.`;
 const CONTINUE_PROMPT = "Your previous reply was cut off by the length limit. Continue it exactly from the point where it stopped, mid-line if needed. Do not repeat anything already written, do not add an introduction, and do not start a new code block.";
 let convs = LS.get("xa.convs", []);
 let current = null;
@@ -335,15 +339,15 @@ function xaInject(CHECK, TOKEN) {
         }
       });
       var docH = Math.max(de.scrollHeight, b.scrollHeight), checked = new Set(), sy0 = scrollY;
-      for (var s = 0; s < 6; s++) {
+    )XUI"
+    R"XUI(  for (var s = 0; s < 6; s++) {
         var y = s * H * 0.8; if (s && y >= docH - H * 0.2) break;
         window.scrollTo({ top: y, left: 0, behavior: "instant" });
         items.forEach(function (it) {
           var el = it.el; if (checked.has(el)) return;
           var r = el.getBoundingClientRect();
           var x0 = Math.max(r.left, 0), x1 = Math.min(r.right, W), y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, H);
-          if (x1 - x0 < 8 || y1 - y0 < 8 || (x1 - x0) * (y1 - y0) < 0.4 * Math.min(it.area, )XUI"
-    R"XUI(W * H * 0.5)) return;
+          if (x1 - x0 < 8 || y1 - y0 < 8 || (x1 - x0) * (y1 - y0) < 0.4 * Math.min(it.area, W * H * 0.5)) return;
           checked.add(el);
           var tot = 0, own = 0, by = new Map();
           for (var gx = 0; gx < 5; gx++) for (var gy = 0; gy < 5; gy++) {
@@ -376,6 +380,39 @@ function xaInject(CHECK, TOKEN) {
       };
       for (var q = 0; q < document.styleSheets.length; q++) { try { walk(document.styleSheets[q].cssRules); } catch (e) { } }
       if (unused.length) add("minor", "These CSS rules match nothing in the page, so they have no effect (check the class names and the HTML structure match): " + unused.join(", "));
+      var code = [].map.call(document.scripts, function (x) { return x.textContent; }).filter(function (t) { return t.indexOf("xaInject") < 0; }).join("\n");
+      var trig = code.match(/Math\.(sin|cos|tan)\((?:[^()]|\([^()]*\))*\)/g) || [];
+      var degCalls = trig.filter(function (c) { return !/PI|rad/i.test(c) && /\b(30|45|60|90|180|270|360|6)\b|deg/i.test(c); });
+      if (degCalls.length) add("major", "The JavaScript passes degrees to " + degCalls.slice(0, 2).join(" and ") + ", but Math.sin/Math.cos/Math.tan expect radians, so positions come out in the wrong places. Convert first: angleInRadians = degrees * Math.PI / 180.");
+      var ns = code.match(/setAttributeNS\(\s*["'`]http:\/\/www\.w3\.org\/1999\/xlink["'`]\s*,\s*["'`](?!xlink:href|href)[\w:-]+/g);
+      if (ns) add("major", "The JavaScript uses " + ns[0] + "\", …): putting '" + ns[0].split(/["'`]/).pop() + "' in the xlink namespace means the browser ignores it completely. Use element.setAttribute(name, value) instead.");
+      var bad = [], bodyAll = b.getElementsByTagName("*");
+      for (var z = 0; z < bodyAll.length && bad.length < 3; z++) {
+        var at = bodyAll[z].attributes;
+        for (var w = 0; w < at.length; w++) if (/(^|[^\w])(NaN|undefined|Infinity)([^\w]|$)/.test(at[w].value) && at[w].name !== "class") { bad.push(desc(bodyAll[z]) + " " + at[w].name + '="' + at[w].value.slice(0, 40) + '"'); break; }
+      }
+      if (bad.length) add("major", "A calculation produced an invalid value, so these are not drawn properly: " + bad.join("; ") + ".");
+      var groups = {};
+      for (var g2 = 0; g2 < bodyAll.length; g2++) {
+        var e2 = bodyAll[g2]; if (/^(script|style|g|defs|tspan)$/i.test(e2.tagName)) continue;
+        var r2 = e2.getBoundingClientRect(); if (r2.width + r2.height < 2) continue;
+        var key = e2.tagName + "|" + (e2.parentElement ? [].indexOf.call(bodyAll, e2.parentElement) : -1) + "|" + Math.round(r2.left) + "," + Math.round(r2.top) + "," + Math.round(r2.width) + "," + Math.round(r2.height);
+        (groups[key] = groups[key] || []).push(e2);
+      }
+      var stacked = new Map();
+      Object.keys(groups).forEach(function (k) { var gr = groups[k]; if (gr.length < 2) return; var pk = gr[0].tagName + "|" + k.split("|")[1]; var o = stacked.get(pk) || { n: 0, el: gr[0] }; o.n += gr.length; stacked.set(pk, o); });
+      stacked.forEach(function (o) { var gr = { length: o.n, 0: o.el }; if (gr.length >= 3) add("major", gr.length + " " + desc(gr[0]).split(" ")[0].replace(/>?$/, ">") + " elements inside " + desc(gr[0].parentElement) + " are drawn in exactly the same spot on top of each other; they were meant to be spread out (check the position or rotation maths and that the transform is really applied)."); });
+      var timeBased = /getSeconds|getMilliseconds|Date\.now|performance\.now/.test(code);
+      var expectMotion = timeBased && (/requestAnimationFrame/.test(code) || (code.match(/setInterval\([^;]*?,\s*(\d+)\s*\)/g) || []).some(function (m) { return parseInt(m.match(/(\d+)\s*\)$/)[1], 10) <= 1000; }));
+      if (expectMotion) {
+        var snap = function () { var out = []; for (var i3 = 0; i3 < bodyAll.length && i3 < 3000; i3++) { var r3 = bodyAll[i3].getBoundingClientRect(); out.push(Math.round(r3.left * 2) + "," + Math.round(r3.top * 2) + "," + Math.round(r3.width * 2) + "," + Math.round(r3.height * 2) + "," + (bodyAll[i3].childElementCount ? "" : (bodyAll[i3].textContent || "").slice(0, 40))); } return out.join("|") + "#" + bodyAll.length; };
+        var before = snap();
+        setTimeout(function () {
+          try { if (snap() === before) add("major", "The script runs a timer or animation, but nothing on the page moves or changes over 2.5 seconds (for example clock hands that never turn). Check the values are calculated and actually applied to the elements."); } catch (e) { }
+          post();
+        }, 2500);
+        return;
+      }
     } catch (e) { add("minor", "checker error: " + e.message); }
     post();
   }
@@ -476,7 +513,8 @@ function inline(t) {
   t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   return t;
 }
-function blocks(text) {
+function blocks(t)XUI"
+    R"XUI(ext) {
   const out = []; const lines = text.split("\n"); let list = null; let para = [];
   const flushP = () => { if (para.length) { out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; } };
   const flushL = () => { if (list) { out.push(`<${list.t}>` + list.items.map(i => "<li>" + inline(i) + "</li>").join("") + `</${list.t}>`); list = null; } };
@@ -552,8 +590,7 @@ function renderMsgs() {
 }
 function msgHtml(m, i, streaming) {
   if (m.auto) {
-    const items )XUI"
-    R"XUI(= (m.issues || []).map(x => `<li>${esc(x.msg)}</li>`).join("");
+    const items = (m.issues || []).map(x => `<li>${esc(x.msg)}</li>`).join("");
     return `<div class="msg note${m.ok ? " ok" : ""}" data-i="${i}">${esc(m.label || "")}${items ? `<details><summary>details</summary><ol>${items}</ol></details>` : ""}</div>`;
   }
   const who = m.role === "user" ? "You" : (m.model ? nick(m.model) : "Xbox");
@@ -680,7 +717,8 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
             if (piece !== "<think>\n") { live.toks++; live.chars += piece.length; }
             let shown = added;
             if (opt.fenceOpen) shown = shown.replace(/^\s*```[\w+#.-]*[ \t]*\n?/, m => (m.includes("\n") || shown.length > m.length) ? "" : m);
-            reply.content = base + shown;
+            reply.content = )XUI"
+    R"XUI(base + shown;
             const th = splitThink(reply.content);
             const stage = th.open ? "Thinking it through" : opt.append ? (waitLabel === "Continuing" ? "Continuing" : "Writing") : "Writing";
             if (stage !== live.stage) liveSet(stage, th.open ? "pulse" : "");
@@ -732,7 +770,7 @@ async function autoCheck(reply) {
     saveConvs(); renderMsgs(); return;
   }
   const list = issues.map((x, i) => `${i + 1}. ${x.msg}`).join("\n");
-  const report = `I opened your page in a browser (1280×800 window) and an automatic check found these problems:\n${list}\n\nFix every problem. Reply with the complete corrected file in one \`\`\`html code block, keeping everything that already works.`;
+  const report = `I opened your page in a browser (1280×800 window) and an automatic check found these problems:\n${list}\n\nFix every problem, and also make sure the page includes everything the original request asked for. Reply with the complete corrected file in one \`\`\`html code block, keeping everything that already works.`;
   conv.messages.push({ role: "user", auto: "check", label: `🔍 Auto-check found ${major.length} problem${major.length > 1 ? "s" : ""}, asking for a fix (round ${round + 1} of ${MAX_FIX_ROUNDS})`, issues, content: report });
   const fix = { role: "assistant", content: "", model: reply.model, build: true, fixRound: round + 1 };
   conv.messages.push(fix);
@@ -744,8 +782,7 @@ async function autoCheck(reply) {
 
 function paintLast(streaming) {
   const box = $("#msgs"); const i = current.messages.length - 1;
-  const last)XUI"
-    R"XUI( = box.querySelector(`.msg[data-i="${i}"]`);
+  const last = box.querySelector(`.msg[data-i="${i}"]`);
   const tmp = document.createElement("div"); tmp.innerHTML = msgHtml(current.messages[i], i, streaming);
   if (last) last.replaceWith(tmp.firstChild); else box.appendChild(tmp.firstChild);
   scrollDown();
@@ -839,7 +876,8 @@ async function loadLogs() { $("#logbox").textContent = "Loading…"; try { const
 $("#b-settings").onclick = () => {
   $("#s-system").value = settings.system; $("#s-temp").value = settings.temperature; $("#s-temp-v").textContent = settings.temperature; $("#s-max").value = settings.max_tokens; $("#s-auto").checked = settings.autoContinue !== false; show("#m-settings");
 };
-$("#s-system").oninput = () => { settings.system = $("#s-system").value; LS.set("xa.settings", settings); };
+$("#s-system").oninput = () => { settings.system = $("#s-system").value; LS)XUI"
+    R"XUI(.set("xa.settings", settings); };
 $("#s-system-reset").onclick = () => { settings.system = DEFAULT_SYSTEM; $("#s-system").value = DEFAULT_SYSTEM; LS.set("xa.settings", settings); };
 $("#s-temp").oninput = () => { settings.temperature = +$("#s-temp").value; $("#s-temp-v").textContent = settings.temperature; LS.set("xa.settings", settings); };
 $("#o-think").checked = settings.think !== false; $("#o-check").checked = settings.autoCheck !== false;
