@@ -12,7 +12,11 @@
     #include "xllama/platform.h"
     #include "xllama/web_search.h"
 
+    #include <winrt/Windows.Data.Json.h>
+    #include <winrt/Windows.Storage.Streams.h>
+
     #include <cstdio>
+    #include <stdexcept>
 
 namespace xllama::uwp {
 
