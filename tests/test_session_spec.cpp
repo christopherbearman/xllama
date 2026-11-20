@@ -109,3 +109,17 @@ TEST_CASE("SessionHub reuses only the same load (opt-in: XLLAMA_TEST_MODEL)") {
     hub.invalidate_locked("m"); // this model's files changed: stale even if equal
     CHECK(hub.session == nullptr);
 }
+
+TEST_CASE("resolve_session_params: catalogue kv_q8 reaches the session (fork)") {
+    CatalogueLoad c;
+    c.found = true;
+    c.gguf = true;
+    c.n_ctx = 8192;
+    c.gpu_layers = 99;
+    c.kv_q8 = true;
+    const auto sp = resolve_session_params("qwen35-9b-plus", c, "D:\\m\\qwen35-9b-plus", -1);
+    CHECK(sp.kv_q8);
+    CatalogueLoad off = c;
+    off.kv_q8 = false;
+    CHECK_FALSE(same_load(sp, resolve_session_params("qwen35-9b-plus", off, "D:\\m\\qwen35-9b-plus", -1)));
+}

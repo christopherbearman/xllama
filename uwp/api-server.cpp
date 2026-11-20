@@ -1152,7 +1152,7 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
         return error_json(model_not_found(model));
     }
 
-    std::string system, final_user;
+    std::string system, final_user, assistant_prefill;
     std::vector<::xllama::ChatTurn> history;
     if (!proposal) {
         if (!root.HasKey(L"messages") ||
@@ -1160,7 +1160,22 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
             status = "400 Bad Request";
             return error_json("missing or non-array 'messages'");
         }
-        split_messages(root.GetNamedArray(L"messages"), system, history, final_user);
+        // Fork: a trailing assistant message is a prefill to continue from
+        // (a reply cut off at max_tokens). The prompt then ends with that text
+        // and generation carries on mid-line; since it equals what the model
+        // just produced, the resident KV is a pure prefix and nothing is re-read.
+        JsonArray msgs = root.GetNamedArray(L"messages");
+        if (msgs.Size() > 0) {
+            const JsonObject last = msgs.GetObjectAt(msgs.Size() - 1);
+            if (winrt::to_string(last.GetNamedString(L"role", L"")) == "assistant") {
+                assistant_prefill = winrt::to_string(last.GetNamedString(L"content", L""));
+                JsonArray rest;
+                for (uint32_t i = 0; i + 1 < msgs.Size(); ++i)
+                    rest.Append(msgs.GetAt(i));
+                msgs = rest;
+            }
+        }
+        split_messages(msgs, system, history, final_user);
         if (final_user.empty()) {
             status = "400 Bad Request";
             return error_json("no user message to complete");
@@ -1244,11 +1259,21 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
         // Fork: shrink the reply's room (down to 1024 tokens) before dropping
         // history, so a "fix this code" turn keeps the code; the page continues
         // a reply cut short by the smaller cap.
-        int fitted_n_predict = gp.n_predict;
+        // A prefill is the start of the reply: budget it as reply room.
+        const int prefill_tok =
+            assistant_prefill.empty() ? 0 : std::max(0, session->count_tokens(assistant_prefill));
+        int fitted_n_predict = gp.n_predict + prefill_tok;
         const ::xllama::PromptFit fit = ::xllama::fit_prompt_keep_history(
-            fmt, system, history, final_user, policy_n_ctx, gp.n_predict, 1024,
+            fmt, system, history, final_user, policy_n_ctx, gp.n_predict + prefill_tok,
+            1024 + prefill_tok,
             [session](const std::string& text) { return session->count_tokens(text); },
             &fitted_n_predict);
+        fitted_n_predict -= prefill_tok;
+        if (fitted_n_predict < 32) {
+            status = "400 Bad Request";
+            return error_json("the conversation is full: no room left to continue this reply "
+                              "(n_ctx " + std::to_string(policy_n_ctx) + ")");
+        }
         if (fit.fits && fitted_n_predict != gp.n_predict) {
             ::xllama::log_output("[xllama] api: reply cap " + std::to_string(gp.n_predict) +
                                  " -> " + std::to_string(fitted_n_predict) +
@@ -1278,9 +1303,22 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
         root.GetNamedValue(L"chat_template_kwargs").ValueType() == JsonValueType::Object)
         want_think = root.GetNamedObject(L"chat_template_kwargs")
                          .GetNamedBoolean(L"enable_thinking", want_think);
-    const bool thinking = want_think && ::xllama::apply_thinking_prefill(gp.prompt, fmt.gen_suffix);
+    bool thinking = assistant_prefill.empty() && want_think &&
+                    ::xllama::apply_thinking_prefill(gp.prompt, fmt.gen_suffix);
     if (thinking)
         ::xllama::log_output("[xllama] api: thinking on for this reply\n");
+    if (!assistant_prefill.empty()) {
+        // A reply that began in thinking mode was streamed as "<think>\n…":
+        // that text replaces the no-think prefill, as the original prompt did.
+        if (assistant_prefill.rfind(::xllama::kThinkOpenPrefill, 0) == 0 &&
+            !fmt.gen_suffix.empty() && gp.prompt.size() >= fmt.gen_suffix.size() &&
+            gp.prompt.compare(gp.prompt.size() - fmt.gen_suffix.size(), fmt.gen_suffix.size(),
+                              fmt.gen_suffix) == 0)
+            gp.prompt.resize(gp.prompt.size() - fmt.gen_suffix.size());
+        gp.prompt += assistant_prefill;
+        ::xllama::log_output("[xllama] api: continuing an assistant reply (" +
+                             std::to_string(assistant_prefill.size()) + " chars prefilled)\n");
+    }
     fill_sampling(root, gp);
     // Client-supplied stop: a string or an array of strings, added to the
     // format's own stops so clients can bound output.

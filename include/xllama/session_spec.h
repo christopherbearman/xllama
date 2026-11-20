@@ -22,6 +22,7 @@ struct CatalogueLoad {
     int gpu_layers = 0; // catalogue default; the operator knob may override it
     std::string lora;   // adapter file relative to the model directory
     float lora_scale = 1.0f;
+    bool kv_q8 = false; // fork: catalogue "kv_q8": q8_0 KV cache (+ flash attention, #171)
 };
 
 // `model_dir` is where the model's files live (resolve_model_path on the bare
@@ -39,6 +40,7 @@ inline SessionParams resolve_session_params(const std::string& model, const Cata
         return sp;
     sp.backend = Backend::LlamaCpp;
     sp.n_gpu_layers = resolve_gguf_gpu_layers(c.gpu_layers, gpu_layers_knob);
+    sp.kv_q8 = c.kv_q8;
     if (!c.lora.empty()) {
         sp.lora_path = model_dir;
         if (!sp.lora_path.empty() && sp.lora_path.back() != '\\' && sp.lora_path.back() != '/')

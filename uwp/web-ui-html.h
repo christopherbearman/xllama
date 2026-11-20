@@ -245,6 +245,9 @@ const NO_REPEAT_NOTE = "\n\n(Reply to this message only. Do not repeat or rewrit
 function shingles(t) { const w = (answerOf(t) || "").toLowerCase().replace(/[^a-z0-9£ ]+/g, " ").split(/\s+/).filter(Boolean); const set = new Set(); for (let i = 0; i + 2 < w.length; i++) set.add(w[i] + " " + w[i + 1] + " " + w[i + 2]); return set; }
 function similar(a, b) { const A = shingles(a), B = shingles(b); if (A.size < 15 || B.size < 15) return 0; let n = 0; A.forEach(x => { if (B.has(x)) n++; }); return n / Math.min(A.size, B.size); }
 const MAX_FIX_ROUNDS = 2;
+// Plans past ~500 tokens (~2,000 characters) rarely add anything for a page and
+// eat the reply's room: stop planning there and write.
+const THINK_BUDGET_CHARS = 2000;
 const IMAGE_PROMPT_SYSTEM = "You write prompts for a Stable Diffusion image model (DreamShaper). Turn the user's description into ONE prompt of at most 60 words: the main subject first, then setting, composition and camera angle, lighting, colours, mood and art style, as comma-separated phrases. Keep everything the user asked for. Reply with the prompt only: no quotes, no explanation.";
 const BUILD_SYSTEM = `You are an expert front-end developer. Reply with ONE complete, self-contained HTML file in a single \`\`\`html code block (CSS in <style>, JavaScript in <script>), then at most two sentences of explanation.
 Rules:
@@ -322,9 +325,9 @@ function xaInject(CHECK, TOKEN) {
       var W = innerWidth, H = innerHeight, de = document.documentElement, b = document.body;
       if (!b) { add("major", "The page has no <body>."); return post(); }
       var bcs = getComputedStyle(b), dcs = getComputedStyle(de);
-      var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
-      var all = b.querySelectorAll(")XUI"
-    R"XUI(*"), items = [];
+      )XUI"
+    R"XUI(var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
+      var all = b.querySelectorAll("*"), items = [];
       for (var i = 0; i < all.length && i < 2500; i++) {
         var el = all[i]; if (el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) continue;
         var r = el.getBoundingClientRect(); var area = r.width * r.height;
@@ -478,11 +481,11 @@ function htmlFrom(text) {
 }
 
 // ---------- live indicator ----------
-const live = { on: false, stage: "", t0: 0, chars: 0, toks: 0, tFirst: 0, timer: 0, think: false };
+const live = { on: false, stage: "", t0: 0, chars: 0, toks: 0, tFirst: 0, timer: 0, think: false })XUI"
+    R"XUI(;
 function liveStart(stage, think) {
   Object.assign(live, { on: true, stage, t0: performance.now(), chars: 0, toks: 0, tFirst: 0, think: !!think });
-  $("#live").classLi)XUI"
-    R"XUI(st.add("on"); liveSet(stage);
+  $("#live").classList.add("on"); liveSet(stage);
   clearInterval(live.timer); live.timer = setInterval(liveTick, 250); liveTick();
 }
 function liveSet(stage, kind) {
@@ -632,6 +635,7 @@ function buildPrompt(text) {
   return text;
 }
 const reqHist = new WeakMap();
+const reqSys = new WeakMap(); // system prompt a reply was started with (a continuation must match it)
 const isBuildText = t => /^\s*\/build\s/i.test(t || "");
 const unBuild = t => (t || "").replace(/^\s*\/build\s+/i, "");
 function lastUser(upTo) { for (let i = upTo; i >= 0; i--) { const m = current.messages[i]; if (m.role === "user" && !m.auto) return m; } return null; }
@@ -662,7 +666,7 @@ async function send(textOverride) {
   if (isImage && settings.imageThink) {
     const desc = text.replace(/^\s*\/(image|img)\s+/i, "");
     reply.model = model;
-    await streamInto(reply, [{ role: "user", content: desc }], model, "Thinking up the picture", false, { think: true, system: IMAGE_PROMPT_SYSTEM, maxTokens: 1500, noAuto: true });
+    await streamInto(reply, [{ role: "user", content: desc }], model, "Thinking up the picture", false, { think: true, system: IMAGE_PROMPT_SYSTEM, maxTokens: 1500, noAuto: true, thinkBudget: 1600 });
     if (reply.error || reply.stopped) return;
     const t = splitThink(reply.content);
     const prompt = t.answer.replace(/```[\s\S]*?```/g, "").replace(/^\s*(prompt\s*:)?\s*/i, "").split("\n").map(x => x.trim()).filter(Boolean)[0]?.replace(/^["'*]+|["'*]+$/g, "") || desc;
@@ -671,75 +675,37 @@ async function send(textOverride) {
     await streamInto(reply, [{ role: "user", content: "/image " + prompt }], model, "Making the picture", true, { append: true });
     return;
   }
-  await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", isImage, { think: build && settings.think });
+  await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", isImage, { think: build && settings.think, thinkBudget: THINK_BUDGET_CHARS });
 }
 
-// Continue a reply cut off by the length limit. A reply cut off while still
-// planning is restarted as "write the answer from this plan" with thinking off.
-async function continueReply(auto) {
+// Continue a reply cut off by the length limit (or a plan cut by the thinking
+// budget). The unfinished reply goes back as a tr)XUI"
+    R"XUI(ailing assistant message: the
+// server ends the prompt with it and the model carries on mid-line. It is
+// exactly the text the model produced, so the Xbox reuses its KV and does not
+// re-read the conversation. A plan still open is closed first, so it writes.
+async function continueReply(auto, closePlan) {
   if (busy || !current) return;
   const idx = current.messages.length - 1;
   const reply = current.messages[idx];
   if (!reply || reply.role !== "assistant" || !reply.content) return;
-  reply.autoCount = auto ? (reply.autoCount || 0) + 1 : 0;
-  reply.finish =)XUI"
-    R"XUI( "";
+  if (auto) reply.autoCount = (reply.autoCount || 0) + 1;
+  reply.finish = "";
   let base = reqHist.get(reply);
   if (!base) base = current.messages.slice(0, idx).filter(m => !m.error && !(m.auto && !m.content)).map(m => ({ role: m.role, content: m.role === "user" ? unBuild(m.content) : stripImages(m.content) }));
   const t = splitThink(reply.content);
-  if (t.open) {
-    const h = base.map(x => ({ ...x }));
-    const u = h[h.length - 1];
-    u.content += "\n\nYou already planned this:\n" + t.plan.slice(-6000) + "\n\nNow write the final answer following that plan.";
+  let label = "Continuing";
+  if (t.open || closePlan) {
     reply.content = reply.content.replace(/\s*$/, "") + "\n</think>\n\n";
-    await streamInto(reply, h, reply.model || $("#model").value, "Plan done, now writing", false, { append: true, keepHist: base });
-    return;
+    label = "Plan done, now writing";
   }
-  // Stitching: a reply cut mid-line loses that partial line, and the model is
-  // asked to rewrite it in full; lines it repeats from before are dropped as
-  // they stream (stitchLines). Resuming mid-line made it skip text (line 167).
-  let answer = t.answer;
-  const nl = answer.lastIndexOf("\n");
-  const partial = answer.slice(nl + 1);
-  let prompt = CONTINUE_PROMPT;
-  if (partial.trim() && nl >= 0) {
-    answer = answer.slice(0, nl + 1);
-    reply.content = reply.content.slice(0, reply.content.length - partial.length);
-    prompt = "Your previous reply was cut off by the length limit in the middle of this line:\n" + partial.trim() +
-      "\nContinue the reply starting with that complete line, rewritten in full, then carry on exactly where it stopped. Do not repeat anything before that line, do not add an introduction, and do not start a new code block.";
-  }
-  const history = [...base, { role: "assistant", content: answer }, { role: "user", content: prompt }];
-  const fenceOpen = (answer.match(/```/g) || []).length % 2 === 1;
-  await streamInto(reply, history, reply.model || $("#model").value, "Continuing", false, { append: true, fenceOpen, stitch: true, keepHist: base });
-}
-
-// Drop leading lines of a continuation that repeat the last lines already
-// written (models often restart a line or two early). Only whole lines that
-// match exactly (ignoring indentation) are dropped, and only from the start.
-function stitchLines(base, added) {
-  const tail = base.split("\n").map(l => l.trim()).filter(Boolean).slice(-8);
-  if (!tail.length) return added;
-  const lines = added.split("\n");
-  let start = 0;
-  while (start < lines.length - 1 && !lines[start].trim()) start++;
-  // Find where the continuation's first real line sits in the tail, then skip the run that matches.
-  const first = (lines[start] || "").trim();
-  // Short lines ("}", "</div>") repeat legitimately, so only a distinctive line anchors a match.
-  const at = first.length >= 12 ? tail.lastIndexOf(first) : -1;
-  let drop = start;
-  if (at >= 0) {
-    let k = at;
-    while (drop < lines.length - 1 && k < tail.length && (lines[drop].trim() === tail[k] || !lines[drop].trim())) {
-      if (lines[drop].trim()) k++;
-      drop++;
-    }
-    return lines.slice(drop).join("\n");
-  }
-  return added;
+  const history = [...base, { role: "assistant", content: reply.content }];
+  await streamInto(reply, history, reply.model || $("#model").value, label, false, { append: true, keepHist: base, system: reqSys.get(reply) });
 }
 
 async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   reqHist.set(reply, opt.keepHist || history);
+  if (opt.system) reqSys.set(reply, opt.system);
   const body = {
     model, stream: true, temperature: opt.temperature ?? settings.temperature, max_tokens: opt.maxTokens || settings.max_tokens,
     messages: [{ role: "system", content: opt.system || (reply.build ? BUILD_SYSTEM : (settings.system || DEFAULT_SYSTEM)) }, ...history]
@@ -751,6 +717,7 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   const t0 = performance.now(); let firstTok = 0; let chunks = 0;
   const base = opt.append ? reply.content : "";
   let added = "";
+  let planCut = false;
   reply.stopped = false;
   aborter = new AbortController();
   try {
@@ -779,10 +746,12 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
             added += piece; chunks++;
             if (piece !== "<think>\n") { live.toks++; live.chars += piece.length; }
             let shown = added;
-            if (opt.stitch) shown = stitchLines(base, shown);
             if (opt.fenceOpen) shown = shown.replace(/^\s*```[\w+#.-]*[ \t]*\n?/, m => (m.includes("\n") || shown.length > m.length) ? "" : m);
             reply.content = base + shown;
             const th = splitThink(reply.content);
+            if (opt.thinkBudget && th.open && th.plan.length > opt.thinkBudget && !planCut) {
+              planCut = true; aborter.abort(); // budget reached: stop planning, then write
+            }
             const stage = th.open ? "Thinking it through" : opt.append ? (waitLabel === "Continuing" ? "Continuing" : "Writing") : "Writing";
             if (stage !== live.stage) liveSet(stage, th.open ? "pulse" : "");
             paintLast(true);
@@ -796,11 +765,17 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
     reply.stats = opt.append ? (reply.stats ? reply.stats + " · continued" : st) : st;
     if (!reply.content) reply.error = "The Xbox returned an empty reply.";
   } catch (e) {
-    if (e.name === "AbortError") { reply.stats = "stopped"; reply.finish = ""; reply.stopped = true; if (!reply.content) reply.error = "Stopped."; }
+    if (e.name === "AbortError" && planCut) { reply.finish = ""; }
+    else if (e.name === "AbortError") { reply.stats = "stopped"; reply.finish = ""; reply.stopped = true; if (!reply.content) reply.error = "Stopped."; }
     else reply.error = /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? "Couldn't reach the Xbox. Is xllama open on the console?" : "Error: " + e.message;
   } finally {
     setBusy(false); aborter = null; liveStop();
     current.updated = Date.now(); saveConvs(); renderConvList(); renderMsgs(); poll();
+  }
+  if (planCut && !reply.error) {
+    reply.stats = (reply.stats || "") + " · plan capped";
+    await continueReply(false, true);
+    return;
   }
   if (opt.noAuto) return;
   // Small models sometimes copy their previous answer instead of replying to a
@@ -868,13 +843,12 @@ async function autoCheck(reply) {
   // drops the final message, so the page can no longer silently vanish.
   const one = "The original request was:\n" + orig.slice(0, 2500) + "\n\nHere is the current page:\n```html\n" + html + "\n```\n\n" + report;
   const history = [{ role: "user", content: one }];
-  await streamInto(fix, history, reply.model || $("#model").value, "Fixing the problems", false, { think: settings.think && html.length < 6000 });
+  await streamInto(fix, history, reply.model || $("#model").value, "Fixing the problems", false, { think: settings.think && html.length < 6000, thinkBudget: THINK_BUDGET_CHARS });
 }
 
 function paintLast(streaming) {
   const box = $("#msgs"); const i = current.messages.length - 1;
-  c)XUI"
-    R"XUI(onst last = box.querySelector(`.msg[data-i="${i}"]`);
+  const last = box.querySelector(`.msg[data-i="${i}"]`);
   const tmp = document.createElement("div"); tmp.innerHTML = msgHtml(current.messages[i], i, streaming);
   if (last) last.replaceWith(tmp.firstChild); else box.appendChild(tmp.firstChild);
   scrollDown();
@@ -894,7 +868,8 @@ $("#msgs").addEventListener("click", async e => {
   if (act === "retry") {
     current.messages.pop();
     const prev = current.messages[current.messages.length - 1];
-    if (prev?.auto) { current.messages.pop(); const r = current.messages[current.messages.length - 1]; if (r?.role === "assistant") { r.fixRound = (r.fixRound || 1) - 1; renderMsgs(); autoCheck(r); } return; }
+    if (prev?.auto) { current.messages.pop(); const r = current.messages[current.messages.length - 1]; if (r?.role === "assistant") )XUI"
+    R"XUI({ r.fixRound = (r.fixRound || 1) - 1; renderMsgs(); autoCheck(r); } return; }
     send(prev?.content);
   }
 });

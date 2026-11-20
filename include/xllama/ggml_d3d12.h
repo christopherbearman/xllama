@@ -43,6 +43,8 @@ inline constexpr int kD3d12LongKChunks = 16; // K >= 4096 → 128 threads
 // Every kernel walks K in 256-element chunks (one Q4_K/Q6_K super-block, eight
 // Q4_0 blocks).
 inline constexpr int kD3d12Chunk = 256;
+// Fork: activation columns per group in the tiled prefill kernels (mmt_*).
+inline constexpr int kD3d12Tile = 8;
 inline constexpr std::uint32_t kD3d12MaxGroups = 65535;
 
 // Weight types the backend runs.

@@ -100,6 +100,8 @@ struct ManifestEntry {
     // for models whose D2-r2 gate passed at this entry's n_ctx; the operator
     // knob gguf_gpu_layers.txt overrides it (resolve_gguf_gpu_layers, D3).
     int gpu_layers = 0;
+    // Fork: q8_0 KV cache (half the conversation memory; forces flash attention).
+    bool kv_q8 = false;
 };
 
 // Load the model catalogue: InstalledPath\models\manifest.json (bundled) is

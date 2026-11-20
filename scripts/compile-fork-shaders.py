@@ -15,6 +15,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = [("iq3_xxs", "Iq3Xxs"), ("iq4_xs", "Iq4Xs"), ("q5_k", "Q5K")]
+# Tiled prefill variants (TILE columns per group): shaders/ggml_d3d12_mmt_*.hlsl
+TILE_TARGETS = [("iq3_xxs", "Iq3Xxs"), ("iq4_xs", "Iq4Xs"), ("q4_k", "Q4K"), ("q5_k", "Q5K"), ("q6_k", "Q6K")]
+TILE = 8
 WIDTHS = [64, 128]
 
 
@@ -62,6 +65,17 @@ def main() -> None:
                 emit(obj.read_bytes(), gen / f"ggml_d3d12_mmv_{name}_t{w}_dxil.h",
                      f"shaders/ggml_d3d12_mmv_{name}.hlsl -D NUM_THREADS={w}",
                      f"kGgmlD3d12Mmv{camel}T{w}Dxil")
+    for name, camel in TILE_TARGETS:
+        src = ROOT / "shaders" / f"ggml_d3d12_mmt_{name}.hlsl"
+        for w in WIDTHS:
+            with tempfile.TemporaryDirectory() as td:
+                obj = Path(td) / "out.dxil"
+                cmd = [dxc, "-T", "cs_6_4", "-E", "CSMain", "-D", f"NUM_THREADS={w}", "-D", f"TILE={TILE}",
+                       "-I", str(ROOT / "shaders"), "-Fo", str(obj), str(src)]
+                subprocess.run(cmd, check=True)
+                emit(obj.read_bytes(), gen / f"ggml_d3d12_mmt_{name}_t{w}_dxil.h",
+                     f"shaders/ggml_d3d12_mmt_{name}.hlsl -D NUM_THREADS={w} -D TILE={TILE}",
+                     f"kGgmlD3d12Mmt{camel}T{w}Dxil")
 
 
 if __name__ == "__main__":

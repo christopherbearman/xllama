@@ -716,6 +716,16 @@ void run_d3d12_selftest(std::vector<D3d12SelftestRow>* out) {
         #include "ggml_d3d12_mmv_iq4_xs_t64_dxil.h"
         #include "ggml_d3d12_mmv_q5_k_t128_dxil.h"
         #include "ggml_d3d12_mmv_q5_k_t64_dxil.h"
+        #include "ggml_d3d12_mmt_iq3_xxs_t128_dxil.h"
+        #include "ggml_d3d12_mmt_iq3_xxs_t64_dxil.h"
+        #include "ggml_d3d12_mmt_iq4_xs_t128_dxil.h"
+        #include "ggml_d3d12_mmt_iq4_xs_t64_dxil.h"
+        #include "ggml_d3d12_mmt_q4_k_t128_dxil.h"
+        #include "ggml_d3d12_mmt_q4_k_t64_dxil.h"
+        #include "ggml_d3d12_mmt_q5_k_t128_dxil.h"
+        #include "ggml_d3d12_mmt_q5_k_t64_dxil.h"
+        #include "ggml_d3d12_mmt_q6_k_t128_dxil.h"
+        #include "ggml_d3d12_mmt_q6_k_t64_dxil.h"
         #include "xllama/d3d12_dyn.h"
         #include "xllama/path_utils.h"
         #include "xllama/platform.h"
@@ -756,6 +766,10 @@ struct Gpu {
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pso[kPsoCount][2]; // [type][0 = 64 threads, 1 = 128]
     ComPtr<ID3D12PipelineState> pso_get_rows;      // Q6_K
+    // Fork: tiled prefill (ggml_d3d12_mmt_*.hlsl, kD3d12Tile columns per group);
+    // null where a type has none. d3d12-tile-off.txt disables them.
+    ComPtr<ID3D12PipelineState> pso_tile[kPsoCount][2];
+    bool tile_on = true;
     ComPtr<ID3D12QueryHeap> ts;
     ComPtr<ID3D12Resource> ts_rb;
     // #421 per-dispatch timing (d3d12-dispatch-timing.txt): one timestamp
@@ -891,6 +905,46 @@ bool init_gpu(Gpu& g) {
                 return false;
             }
         }
+    }
+    {
+        // Fork: tiled prefill kernels (Q4_0 has none and keeps per-column).
+        struct TileBlob {
+            int pso;
+            const void* b64;
+            size_t s64;
+            const void* b128;
+            size_t s128;
+        };
+        const TileBlob tb[] = {
+            {kPsoQ4K, kGgmlD3d12MmtQ4KT64Dxil, kGgmlD3d12MmtQ4KT64DxilSize, kGgmlD3d12MmtQ4KT128Dxil,
+             kGgmlD3d12MmtQ4KT128DxilSize},
+            {kPsoQ5K, kGgmlD3d12MmtQ5KT64Dxil, kGgmlD3d12MmtQ5KT64DxilSize, kGgmlD3d12MmtQ5KT128Dxil,
+             kGgmlD3d12MmtQ5KT128DxilSize},
+            {kPsoQ6K, kGgmlD3d12MmtQ6KT64Dxil, kGgmlD3d12MmtQ6KT64DxilSize, kGgmlD3d12MmtQ6KT128Dxil,
+             kGgmlD3d12MmtQ6KT128DxilSize},
+            {kPsoIq3Xxs, kGgmlD3d12MmtIq3XxsT64Dxil, kGgmlD3d12MmtIq3XxsT64DxilSize,
+             kGgmlD3d12MmtIq3XxsT128Dxil, kGgmlD3d12MmtIq3XxsT128DxilSize},
+            {kPsoIq4Xs, kGgmlD3d12MmtIq4XsT64Dxil, kGgmlD3d12MmtIq4XsT64DxilSize,
+             kGgmlD3d12MmtIq4XsT128Dxil, kGgmlD3d12MmtIq4XsT128DxilSize},
+        };
+        for (const TileBlob& t : tb) {
+            for (int wd = 0; wd < 2; ++wd) {
+                D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {};
+                pd.pRootSignature = g.root.Get();
+                pd.CS.pShaderBytecode = wd ? t.b128 : t.b64;
+                pd.CS.BytecodeLength = wd ? t.s128 : t.s64;
+                if (FAILED(g.device->CreateComputePipelineState(&pd,
+                                                                IID_PPV_ARGS(&g.pso_tile[t.pso][wd]))))
+                    g.pso_tile[t.pso][wd].Reset(); // per-column path still works
+            }
+        }
+        if (FILE* f = _wfopen(utf8_to_wstring(resolve_local_path("d3d12-tile-off.txt")).c_str(),
+                              L"rb")) {
+            std::fclose(f);
+            g.tile_on = false;
+        }
+        log_output(std::string("[xllama] d3d12: tiled prefill ") + (g.tile_on ? "on" : "off") +
+                   "\n");
     }
     {
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {};
@@ -1366,17 +1420,24 @@ bool submit_ops(Gpu& g, const std::vector<Op>& ops) {
                     after_dispatch();
                     continue;
                 }
-                const D3d12Dispatch d = d3d12_mm_dispatch(node->ne[0], node->ne[1]);
+                D3d12Dispatch d = d3d12_mm_dispatch(node->ne[0], node->ne[1]);
+                const int wide = d3d12_mm_threads(w->ne[0]) == kD3d12MmvThreadsLong ? 1 : 0;
+                ID3D12PipelineState* pso = g.pso[pso_for(w->type)][wide].Get();
+                // Fork: several columns (prompt reading) use the tiled kernel,
+                // which loads each weight block once per kD3d12Tile columns.
+                if (g.tile_on && node->ne[1] > 1 && g.pso_tile[pso_for(w->type)][wide]) {
+                    pso = g.pso_tile[pso_for(w->type)][wide].Get();
+                    d.groups_y = static_cast<std::uint32_t>((node->ne[1] + kD3d12Tile - 1) / kD3d12Tile);
+                }
                 const std::uint32_t c[8] = {static_cast<std::uint32_t>(w->ne[1]),
                                             static_cast<std::uint32_t>(w->ne[0]),
                                             static_cast<std::uint32_t>(w->ne[0] / kD3d12Chunk),
                                             static_cast<std::uint32_t>(w->nb[1]),
                                             op.xq_row,
                                             static_cast<std::uint32_t>(node->nb[1] / sizeof(float)),
-                                            0,
+                                            static_cast<std::uint32_t>(node->ne[1]), // ncols (tiled)
                                             0};
-                const int wide = d3d12_mm_threads(w->ne[0]) == kD3d12MmvThreadsLong ? 1 : 0;
-                cl->SetPipelineState(g.pso[pso_for(w->type)][wide].Get());
+                cl->SetPipelineState(pso);
                 cl->SetComputeRoot32BitConstants(0, 8, c, 0);
                 cl->SetComputeRootShaderResourceView(1, tensor_va(w));
                 cl->SetComputeRootUnorderedAccessView(2, tensor_va(node));

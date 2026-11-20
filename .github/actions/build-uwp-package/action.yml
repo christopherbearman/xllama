@@ -129,6 +129,7 @@ runs:
         path: |
           shaders/generated/ggml_d3d12_mmv_iq*_dxil.h
           shaders/generated/ggml_d3d12_mmv_q5_k*_dxil.h
+          shaders/generated/ggml_d3d12_mmt_*_dxil.h
 
     - name: Build UWP package
       shell: pwsh
