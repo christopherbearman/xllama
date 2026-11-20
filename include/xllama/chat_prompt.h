@@ -125,10 +125,18 @@ struct ChatFormat {
     // (thinking models). Empty-think stripping for Qwen3 no-think always runs.
     bool strip_thinking_content = false;
 
+    // Fork addition: replay gen_suffix (the empty <think></think> prefill) in
+    // front of every HISTORY assistant turn too. The resident KV holds exactly
+    // "header + gen_suffix + reply", so a re-rendered conversation then shares
+    // its whole prefix with the KV and the next turn prefills only the new
+    // message. Without it Qwen3.5 (hybrid/recurrent cache: no partial rewind)
+    // diverges at the first assistant turn and re-prefills everything.
+    bool history_keeps_gen_suffix = false;
+
     // Full multi-turn prompt ending with the assistant generation header +
-    // gen_suffix. gen_suffix is appended ONLY to the final (trailing) assistant
-    // header, never to completed history turns. History turns are complete
-    // (user + assistant) exchanges.
+    // gen_suffix. gen_suffix is appended to the final (trailing) assistant
+    // header, and to completed history turns only when history_keeps_gen_suffix. History turns are
+    // complete (user + assistant) exchanges.
     std::string render_prompt(const std::string& system, const std::vector<ChatTurn>& history,
                               const std::string& final_user) const;
 

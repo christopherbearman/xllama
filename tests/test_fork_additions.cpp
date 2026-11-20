@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "xllama/chat_prompt.h"
 #include "xllama/diffusion/lcm_scheduler.h"
 #include "xllama/web_search.h"
 
@@ -154,4 +155,22 @@ TEST_CASE("image command and data-URI image stripping") {
     CHECK(xllama::strip_data_uri_images("keep ![x](https://e.com/a.png) and ![y](data:,1)") ==
           "keep ![x](https://e.com/a.png) and [image]");
     CHECK(xllama::strip_data_uri_images("no images here") == "no images here");
+}
+
+TEST_CASE("Qwen3 no-think history replays the empty think block (KV prefix reuse)") {
+    const auto q = xllama::chat_format_for("qwen35-4b");
+    REQUIRE(q.history_keeps_gen_suffix);
+    std::vector<xllama::ChatTurn> hist;
+    xllama::ChatTurn t;
+    t.user = "hi";
+    t.assistant = "Hello!";
+    hist.push_back(t);
+    // Turn 1 prompt + generated reply + stop must be a prefix of the turn-2 prompt.
+    const std::string turn1 = q.render_prompt("sys", {}, "hi") + "Hello!<|im_end|>";
+    const std::string turn2 = q.render_prompt("sys", hist, "more");
+    CHECK(turn2.compare(0, turn1.size(), turn1) == 0);
+    // Formats without a suffix and thinking models are unchanged.
+    CHECK_FALSE(xllama::chat_format_for("phi4-mini").history_keeps_gen_suffix);
+    CHECK_FALSE(xllama::chat_format_for("qwen25-coder-1.5b").history_keeps_gen_suffix);
+    CHECK_FALSE(xllama::chat_format_for("lfm25-1.2b-thinking").history_keeps_gen_suffix);
 }

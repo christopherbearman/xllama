@@ -266,13 +266,13 @@ TEST_CASE("chatml render is byte-exact with the legacy hand-built prompt") {
     CHECK(f.render_prompt(sys, hist, final_user) == legacy);
 }
 
-TEST_CASE("chatml render appends qwen suffix only to the trailing header") {
+TEST_CASE("chatml render replays the qwen suffix on history turns (fork: KV prefix reuse)") {
     const ChatFormat f = chat_format_for("qwen35-0.8b");
     const std::string p = f.render_prompt("sys", {{"u1", "a1"}}, "u2");
     // Trailing header carries the suffix...
     CHECK(p.substr(p.size() - f.gen_suffix.size()) == f.gen_suffix);
-    // ...but the completed history assistant turn does not.
-    const std::string hist_hdr = "<|im_start|>assistant\na1<|im_end|>\n";
+    // ...and so does the completed history assistant turn, as generated.
+    const std::string hist_hdr = "<|im_start|>assistant\n" + f.gen_suffix + "a1<|im_end|>\n";
     CHECK(p.find(hist_hdr) != std::string::npos);
 }
 

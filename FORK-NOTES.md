@@ -9,7 +9,16 @@ copy / save / live HTML preview, chats saved in that browser, and a status,
 log and settings panel. Source: `uwp/web/index.html`; after editing run
 `python3 scripts/embed-web-ui.py` to regenerate `uwp/web-ui-html.h`.
 
-Server behaviour (1.9.0):
+Server behaviour (1.9.0 / 1.10.0):
+
+- The console shows a **server screen** (address + status only); "Show
+  console chat" brings back the old UI ("console-chat.flag" remembers it).
+- **GPU decode** on by default for `qwen35-4b` and `phi4-mini` (catalogue
+  `gpu_layers: 99`): ~1.7x / ~2x faster on Series X.
+- **Conversation memory reuse** for Qwen3-family no-think models: history
+  replays the empty think block, so follow-up turns prefill only the new
+  message (`ChatFormat::history_keeps_gen_suffix`).
+- `max_tokens` larger than a model's context is clamped to half the context.
 
 - API requests **queue** (up to 5 minutes) instead of answering `busy`.
 - xllama holds a **DisplayRequest** while open, so the console stays awake.

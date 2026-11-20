@@ -316,10 +316,11 @@
       ]
     },
     {
-      "_comment": "Qwen3.5-4B Q4_K_M (Apache-2.0, unsloth, text-only file; vision mmproj not used). Fork addition 2026-11-20 as the best all-round coding model that fits the console budget (vendor LiveCodeBench v6 55.8). Arch qwen35: ChatML + model_is_qwen3 no-think prefill (id keeps 'qwen3', no 'thinking'); imrope so can_shift=0 (fail-fast at a full context). Hybrid gated-delta-net + 1-in-4 full attention keeps KV small, so n_ctx 8192 for pasting source. Not console-benchmarked by upstream.",
+      "_comment": "Qwen3.5-4B Q4_K_M (Apache-2.0, unsloth, text-only file; vision mmproj not used). Fork addition 2026-11-20 as the best all-round coding model that fits the console budget (vendor LiveCodeBench v6 55.8). Arch qwen35: ChatML + model_is_qwen3 no-think prefill (id keeps 'qwen3', no 'thinking'); imrope so can_shift=0 (fail-fast at a full context). Hybrid gated-delta-net + 1-in-4 full attention keeps KV small, so n_ctx 8192 for pasting source. Not console-benchmarked by upstream. Fork: gpu_layers 99 measured on Series X 2026-11-20 (256-token reply): qwen35-4b 9.7 -> ~16 tok/s, prefill 35 -> 55 tok/s; phi4-mini ~25 tok/s.",
       "name": "qwen35-4b",
       "display": "Qwen3.5 4B (GGUF · CPU · coding · best quality)",
       "kind": "gguf",
+      "gpu_layers": 99,
       "role": "coding",
       "n_ctx": 8192,
       "hf_base_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main",
@@ -332,10 +333,11 @@
       ]
     },
     {
-      "_comment": "Phi-4-mini-instruct Q4_K_M (3.8B, MIT) — unsloth GGUF. Series S T3 PASS 2026-09-30 (#268): 11.2 tok/s decode, 33.1 prefill, 2765 MB peak, H9 6/8 vs llama32-3b 5/8 (bench/results/2026-09-30-catalogue-gates.csv). >2GB is fine on GGUF but must download straight from HF (GitHub release asset cap). Phi-3 template via chat_format_for (id must keep 'phi' and avoid 'gemma'/'llama'). kind:gguf, CPU-only, KV-reuse, routing disabled. n_ctx 4096 (console 1.6.0.1163, 2026-10-12): 3528-token prompt peak WorkingSetSize 3096 MB vs 2838 MB at 2048 (1515 tok), working set after context alloc 3038 MB; needle at 3547 tokens correct; agent-runtime 50-case eval 48/50 at both n_ctx. Prefill ~28 tok/s, so a full window costs ~2 min before the first token.",
+      "_comment": "Phi-4-mini-instruct Q4_K_M (3.8B, MIT) — unsloth GGUF. Series S T3 PASS 2026-09-30 (#268): 11.2 tok/s decode, 33.1 prefill, 2765 MB peak, H9 6/8 vs llama32-3b 5/8 (bench/results/2026-09-30-catalogue-gates.csv). >2GB is fine on GGUF but must download straight from HF (GitHub release asset cap). Phi-3 template via chat_format_for (id must keep 'phi' and avoid 'gemma'/'llama'). kind:gguf, CPU-only, KV-reuse, routing disabled. n_ctx 4096 (console 1.6.0.1163, 2026-10-12): 3528-token prompt peak WorkingSetSize 3096 MB vs 2838 MB at 2048 (1515 tok), working set after context alloc 3038 MB; needle at 3547 tokens correct; agent-runtime 50-case eval 48/50 at both n_ctx. Prefill ~28 tok/s, so a full window costs ~2 min before the first token. Fork: gpu_layers 99 measured on Series X 2026-11-20 (256-token reply): qwen35-4b 9.7 -> ~16 tok/s, prefill 35 -> 55 tok/s; phi4-mini ~25 tok/s.",
       "name": "phi4-mini",
       "display": "Phi-4 mini (GGUF · CPU)",
       "kind": "gguf",
+      "gpu_layers": 99,
       "n_ctx": 4096,
       "hf_base_url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/main",
       "files": [

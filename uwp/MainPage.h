@@ -134,6 +134,9 @@ class MainPageController : public std::enable_shared_from_this<MainPageControlle
     // xllama::api::server_status() and api::activity() every second.
     void StartApiPanel();
     void RefreshApiPanel();
+    // Fork addition: minimal "server screen" (address + status) in place of the
+    // console chat. On by default; "console-chat.flag" in LocalState turns it off.
+    void SetServerMode(bool on);
     #endif
     // Phase 11 (#116): in-app personalization — train on samples.jsonl, publish
     // merged.gguf as catalogue entry "personalized".
@@ -182,6 +185,14 @@ class MainPageController : public std::enable_shared_from_this<MainPageControlle
     winrt::Windows::UI::Xaml::DispatcherTimer m_api_timer{nullptr};
     winrt::event_token m_api_tick_token{};
     std::wstring m_lan_ip; // cached console IPv4, resolved off the UI thread
+    winrt::Windows::UI::Xaml::Controls::StackPanel m_serverPanel{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBlock m_serverUrlText{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBlock m_serverStateText{nullptr};
+    winrt::Windows::UI::Xaml::Controls::TextBlock m_serverDetailText{nullptr};
+    winrt::Windows::UI::Xaml::Controls::Button m_serverChatButton{nullptr};
+    winrt::Windows::UI::Xaml::Controls::Button m_serverScreenButton{nullptr};
+    winrt::Windows::UI::Xaml::Controls::Grid m_footer{nullptr};
+    bool m_server_mode = true;
     winrt::Windows::UI::Xaml::Controls::Button m_runButton{nullptr};
     winrt::Windows::UI::Xaml::Controls::Button m_cancelButton{nullptr};
     winrt::Windows::UI::Xaml::Controls::Button m_newChatButton{nullptr};

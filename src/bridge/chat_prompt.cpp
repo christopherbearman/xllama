@@ -243,6 +243,7 @@ ChatFormat chat_format_for(const std::string& model_id) {
                                                    : qwen_no_think_gen_suffix(model_id);
         f.bos = model_is_minicpm5(model_id) ? "<s>" : "";
         f.strip_thinking_content = model_is_thinking(model_id);
+        f.history_keeps_gen_suffix = !f.gen_suffix.empty() && !f.strip_thinking_content;
     }
     return f;
 }
@@ -276,9 +277,10 @@ std::string ChatFormat::render_prompt(const std::string& system,
 
     for (const ChatTurn& t : history) {
         p += turn_open + user_tag + role_sep + user_content(t.user) + turn_close;
-        // History assistant headers never carry gen_suffix (suffix only on the
-        // trailing header below), matching the legacy hand-built prompt.
-        p += turn_open + assistant_tag + role_sep + t.assistant + turn_close;
+        // History assistant headers carry gen_suffix only for formats that keep
+        // it (see history_keeps_gen_suffix), so the prompt matches the KV.
+        p += turn_open + assistant_tag + role_sep +
+             (history_keeps_gen_suffix ? gen_suffix : std::string()) + t.assistant + turn_close;
     }
 
     p += turn_open + user_tag + role_sep + user_content(final_user) + turn_close;

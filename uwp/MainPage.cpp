@@ -305,8 +305,60 @@ void MainPageController::BuildUI() {
     bodyStack.Children().Append(m_outputBody);
     m_outputScroll.Content(bodyStack);
 
+    // ---- Row 1 (alternative): fork server screen ----
+    m_serverPanel = StackPanel();
+    Grid::SetRow(m_serverPanel, 1);
+    m_serverPanel.HorizontalAlignment(HorizontalAlignment::Center);
+    m_serverPanel.VerticalAlignment(VerticalAlignment::Center);
+    m_serverPanel.Visibility(Visibility::Collapsed);
+    {
+        TextBlock title;
+        title.Text(L"Xbox AI server");
+        title.FontSize(26);
+        title.Opacity(0.8);
+        title.HorizontalAlignment(HorizontalAlignment::Center);
+        TextBlock hint;
+        hint.Text(L"Open this address in a browser on your phone or computer:");
+        hint.FontSize(20);
+        hint.Opacity(0.85);
+        hint.Margin(ThicknessHelper::FromLengths(0, 24, 0, 8));
+        hint.HorizontalAlignment(HorizontalAlignment::Center);
+        m_serverUrlText = TextBlock();
+        m_serverUrlText.Text(L"starting...");
+        m_serverUrlText.FontSize(52);
+        m_serverUrlText.FontWeight(FontWeights::SemiBold());
+        m_serverUrlText.Foreground(
+            winrt::Windows::UI::Xaml::Media::SolidColorBrush({255, 100, 220, 100}));
+        m_serverUrlText.HorizontalAlignment(HorizontalAlignment::Center);
+        m_serverStateText = TextBlock();
+        m_serverStateText.FontSize(22);
+        m_serverStateText.Margin(ThicknessHelper::FromLengths(0, 28, 0, 4));
+        m_serverStateText.HorizontalAlignment(HorizontalAlignment::Center);
+        m_serverDetailText = TextBlock();
+        m_serverDetailText.FontSize(18);
+        m_serverDetailText.Opacity(0.75);
+        m_serverDetailText.HorizontalAlignment(HorizontalAlignment::Center);
+        TextBlock keep;
+        keep.Text(L"Keep this app open on screen \u00B7 the TV can be switched off");
+        keep.FontSize(16);
+        keep.Opacity(0.6);
+        keep.Margin(ThicknessHelper::FromLengths(0, 28, 0, 16));
+        keep.HorizontalAlignment(HorizontalAlignment::Center);
+        m_serverChatButton = Button();
+        m_serverChatButton.Content(winrt::box_value(L"Show console chat"));
+        m_serverChatButton.HorizontalAlignment(HorizontalAlignment::Center);
+        m_serverPanel.Children().Append(title);
+        m_serverPanel.Children().Append(hint);
+        m_serverPanel.Children().Append(m_serverUrlText);
+        m_serverPanel.Children().Append(m_serverStateText);
+        m_serverPanel.Children().Append(m_serverDetailText);
+        m_serverPanel.Children().Append(keep);
+        m_serverPanel.Children().Append(m_serverChatButton);
+    }
+
     // ---- Row 2: footer (metrics + buttons) ----
     Grid footer;
+    m_footer = footer;
     Grid::SetRow(footer, 2);
     footer.Margin(ThicknessHelper::FromLengths(0, 16, 0, 0));
 
@@ -381,6 +433,12 @@ void MainPageController::BuildUI() {
     m_cancelButton.IsEnabled(false);
     m_cancelButton.MinWidth(120);
 
+    m_serverScreenButton = Button();
+    m_serverScreenButton.Content(icon_label(0xE968, L"Server screen"));
+    m_serverScreenButton.MinWidth(100);
+    m_serverScreenButton.Margin(ThicknessHelper::FromLengths(0, 0, 12, 0));
+
+    btnPanel.Children().Append(m_serverScreenButton);
     btnPanel.Children().Append(m_settingsButton);
     btnPanel.Children().Append(m_newChatButton);
     btnPanel.Children().Append(m_historyButton);
@@ -394,6 +452,7 @@ void MainPageController::BuildUI() {
     // ---- wire grid ----
     outerGrid.Children().Append(header);
     outerGrid.Children().Append(m_outputScroll);
+    outerGrid.Children().Append(m_serverPanel);
     outerGrid.Children().Append(footer);
 
     m_root.Content(outerGrid);
@@ -414,8 +473,35 @@ MainPageController::MainPageController() {
 // Init — must be called once after make_shared (shared_from_this is valid here)
 // ---------------------------------------------------------------------------
 
+void MainPageController::SetServerMode(bool on) {
+    m_server_mode = on;
+    m_outputScroll.Visibility(on ? Visibility::Collapsed : Visibility::Visible);
+    m_footer.Visibility(on ? Visibility::Collapsed : Visibility::Visible);
+    m_serverPanel.Visibility(on ? Visibility::Visible : Visibility::Collapsed);
+    if (on) {
+        _wremove(local_wpath(L"console-chat.flag").c_str());
+        m_serverChatButton.Focus(FocusState::Programmatic);
+    } else {
+        write_local_bytes(L"console-chat.flag", "1");
+    }
+    RefreshApiPanel();
+}
+
 void MainPageController::Init() {
     auto self = weak_from_this();
+    m_serverChatButton.Click([self](IInspectable const&, RoutedEventArgs const&) {
+        if (auto s = self.lock())
+            s->SetServerMode(false);
+    });
+    m_serverScreenButton.Click([self](IInspectable const&, RoutedEventArgs const&) {
+        if (auto s = self.lock())
+            s->SetServerMode(true);
+    });
+    {
+        std::error_code ec;
+        const bool chat = std::filesystem::exists(local_wpath(L"console-chat.flag"), ec);
+        SetServerMode(!chat);
+    }
     m_runButton.Click([self](IInspectable const&, RoutedEventArgs const&) {
         if (auto s = self.lock()) {
             auto prompt = s->m_promptInput.Text();
@@ -1668,6 +1754,37 @@ void MainPageController::StartApiPanel() {
 void MainPageController::RefreshApiPanel() {
     namespace Media = winrt::Windows::UI::Xaml::Media;
     const auto server = ::xllama::api::server_status();
+    if (m_server_mode && m_serverUrlText) {
+        // Fork server screen: address + one status line + one detail line.
+        const std::wstring host = m_lan_ip.empty() ? L"<console IP>" : m_lan_ip;
+        const std::wstring port = server.port > 0 ? L":" + std::to_wstring(server.port) : L"";
+        const auto snap = ::xllama::api::activity().snapshot();
+        std::wstring state;
+        if (server.state == ::xllama::api::ServerState::Stopped)
+            state = L"LAN API is off \u2014 turn it on in Settings (Show console chat)";
+        else if (server.state == ::xllama::api::ServerState::Error)
+            state = L"Error: " + ::xllama::utf8_to_wstring(server.message);
+        else if (server.state == ::xllama::api::ServerState::Starting)
+            state = L"Starting...";
+        else if (snap.in_flight)
+            state = L"\u25B6 Working: " + ::xllama::utf8_to_wstring(snap.in_flight->endpoint) +
+                    (snap.in_flight->model.empty()
+                         ? std::wstring()
+                         : L" \u00B7 " + ::xllama::utf8_to_wstring(snap.in_flight->model)) +
+                    L" \u00B7 " + FormatSeconds(snap.in_flight->elapsed_s);
+        else
+            state = L"\u25CF Ready";
+        m_serverUrlText.Text(L"http://" + host + port + L"/ui");
+        m_serverStateText.Text(state);
+        std::wstring detail = std::to_wstring(snap.requests) +
+                              (snap.requests == 1 ? L" request served" : L" requests served");
+        if (snap.last && snap.last->completion_tokens >= 0)
+            detail += L" \u00B7 last reply " + std::to_wstring(snap.last->completion_tokens) +
+                      L" tokens in " + FormatSeconds(snap.last->elapsed_s);
+        m_serverDetailText.Text(detail);
+        m_apiPanel.Visibility(Visibility::Collapsed);
+        return;
+    }
     if (server.state == ::xllama::api::ServerState::Stopped) {
         m_apiPanel.Visibility(Visibility::Collapsed);
         return;
