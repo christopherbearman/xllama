@@ -635,6 +635,7 @@ class LlamaSession final : public Session {
         // differently, and a hybrid cache (Qwen3.5's recurrent layers) cannot
         // rewind even one token, which turned a continuation into a full
         // re-read (measured: common 2511 of 2513 resident).
+        bool in_place = false; // fork: prompt == resident text, continue from the live logits
         if (full_prompt && !m_kv_tokens.empty()) {
             std::string resident;
             resident.reserve(m_kv_tokens.size() * 4);
@@ -673,6 +674,18 @@ class LlamaSession final : public Session {
                         log_output(lb);
                     }
                 }
+            } else if (ok_text && gp.prompt == resident) {
+                // Nothing new to read (a reply continued straight after max_tokens):
+                // every generated token was decoded, so the context still holds
+                // the logits for the next one. Sample from them; prefill nothing.
+                in_place = true;
+                tokens.assign(m_kv_tokens.begin(), m_kv_tokens.end());
+                char lb[128];
+                snprintf(lb, sizeof(lb),
+                         "[xllama] session: continuing in place — %zu resident tokens, nothing "
+                         "to read\n",
+                         m_kv_tokens.size());
+                log_output(lb);
             }
         }
 
@@ -684,7 +697,9 @@ class LlamaSession final : public Session {
         // diverges immediately and degrades to the old full clear.
         llama_memory_t mem = llama_get_memory(ctx);
         size_t kv_keep = 0;
-        if (full_prompt) {
+        if (in_place) {
+            kv_keep = m_kv_tokens.size();
+        } else if (full_prompt) {
             const size_t max_keep = tokens.empty() ? 0 : tokens.size() - 1;
             while (kv_keep < m_kv_tokens.size() && kv_keep < max_keep &&
                    m_kv_tokens[kv_keep] == tokens[kv_keep])
@@ -742,7 +757,7 @@ class LlamaSession final : public Session {
         // prompt, the whole delta on a continuation.
         llama_token* pf = tokens.data() + (full_prompt ? kv_keep : 0);
         const int n_pf = static_cast<int>(tokens.size()) - (full_prompt ? (int)kv_keep : 0);
-        if (n_pf <= 0) {
+        if (n_pf <= 0 && !in_place) {
             // Both callers always render at least one token (a delta carries the
             // turn close + user turn; a full prompt keeps size-1 at most), so
             // this is a programming error, not a user-reachable state. Fail
@@ -820,7 +835,7 @@ class LlamaSession final : public Session {
         InferenceWatchdog wd(gp.progress(), gp.abort_flag);
         wd.enter_prefill(n_pf);
         const auto t_prefill0 = std::chrono::steady_clock::now();
-        if (!prefill_chunked(ctx, pf, n_pf, &wd)) {
+        if (!in_place && !prefill_chunked(ctx, pf, n_pf, &wd)) {
             if (wd.stalled()) {
                 res.stalled = true;
                 res.error_msg = wd.stall_error();
