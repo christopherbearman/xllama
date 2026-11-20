@@ -185,3 +185,42 @@ TEST_CASE("fit_prompt: an INT_MAX reply does not fit and does not overflow (F01)
     CHECK_FALSE(fit.fits);
     CHECK(fit.n_tokens == 10);
 }
+
+TEST_CASE("fit_prompt_keep_history: shrinks the reply before dropping history (fork)") {
+    const auto fmt = chat_format_for("qwen35-9b");
+    // One turn of ~3300 "code" tokens (13200 chars / 4) plus a ~700-token
+    // request, n_ctx 8192, reply asked at 4096: fit_prompt would drop the code.
+    const std::vector<ChatTurn> turns = {{std::string(2800, 'u'), std::string(13200, 'c')}};
+    const std::string fix(600, 'f');
+    const auto plain = fit_prompt(fmt, "sys", turns, fix, 8192, 4096, fake_count);
+    REQUIRE(plain.fits);
+    CHECK(plain.dropped == 1);
+
+    int n_predict = 0;
+    const auto kept =
+        fit_prompt_keep_history(fmt, "sys", turns, fix, 8192, 4096, 1024, fake_count, &n_predict);
+    CHECK(kept.fits);
+    CHECK(kept.dropped == 0);
+    CHECK(kept.prompt.find(std::string(100, 'c')) != std::string::npos);
+    CHECK(n_predict >= 1024);
+    CHECK(n_predict < 4096);
+    CHECK(budget_fits(kept.n_tokens, n_predict, 8192));
+    CHECK_FALSE(budget_fits(kept.n_tokens, n_predict + 1, 8192)); // largest that fits
+}
+
+TEST_CASE("fit_prompt_keep_history: untouched when everything fits, drops below the floor") {
+    const auto fmt = chat_format_for("qwen35-9b");
+    int n_predict = 0;
+    const auto easy = fit_prompt_keep_history(fmt, "sys", make_turns(2, 40), "hi", 8192, 4096,
+                                              1024, fake_count, &n_predict);
+    CHECK(easy.fits);
+    CHECK(easy.dropped == 0);
+    CHECK(n_predict == 4096);
+
+    // History far beyond n_ctx: turns must still go, reply at the floor.
+    const auto big = fit_prompt_keep_history(fmt, "sys", make_turns(40, 4000), "hi", 8192, 4096,
+                                             1024, fake_count, &n_predict);
+    CHECK(big.fits);
+    CHECK(big.dropped > 0);
+    CHECK(n_predict == 1024);
+}

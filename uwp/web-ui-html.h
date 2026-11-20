@@ -197,7 +197,8 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
       <div class="r" style="margin-top:8px"><label style="margin:0;display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="s-auto"> Auto-continue replies that hit the limit (up to 4 times)</label></div></div>
     <div class="field"><label>Download a model to the Xbox</label>
       <div class="r"><select id="s-pull">
-        <option value="qwen35-9b">Big Queef: Qwen3.5 9B — smartest, slow (3.5 GB)</option>
+        <option value="qwen35-9b-plus">Big Queef+: Qwen3.5 9B — best quality, tight on memory (4 GB)</option>
+        <option value="qwen35-9b">Big Queef: Qwen3.5 9B — smart (3.5 GB)</option>
         <option value="qwen35-4b">Qwen3.5 4B — best coding (2.7 GB)</option>
         <option value="phi4-mini">Phi-4 mini — strong all-rounder (2.5 GB)</option>
         <option value="qwen25-coder-1.5b">Qwen2.5 Coder 1.5B — fast coding (1 GB)</option>
@@ -322,10 +323,10 @@ function xaInject(CHECK, TOKEN) {
       if (!b) { add("major", "The page has no <body>."); return post(); }
       var bcs = getComputedStyle(b), dcs = getComputedStyle(de);
       var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
-      var all = b.querySelectorAll("*"), items = [];
+      var all = b.querySelectorAll(")XUI"
+    R"XUI(*"), items = [];
       for (var i = 0; i < all.length && i < 2500; i++) {
-        var el = all[i]; if ()XUI"
-    R"XUI(el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) continue;
+        var el = all[i]; if (el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) continue;
         var r = el.getBoundingClientRect(); var area = r.width * r.height;
         if (area < W * H * 0.015 || !vis(el) || !painted(el)) continue;
         items.push({ el: el, area: area });
@@ -480,9 +481,9 @@ function htmlFrom(text) {
 const live = { on: false, stage: "", t0: 0, chars: 0, toks: 0, tFirst: 0, timer: 0, think: false };
 function liveStart(stage, think) {
   Object.assign(live, { on: true, stage, t0: performance.now(), chars: 0, toks: 0, tFirst: 0, think: !!think });
-  $("#live").classList.add("on"); liveSet(stage);
-  clearInterval(live.timer); live.timer = setInterval(liveTick, 250); liv)XUI"
-    R"XUI(eTick();
+  $("#live").classLi)XUI"
+    R"XUI(st.add("on"); liveSet(stage);
+  clearInterval(live.timer); live.timer = setInterval(liveTick, 250); liveTick();
 }
 function liveSet(stage, kind) {
   live.stage = stage; $("#live .stage").textContent = stage;
@@ -607,7 +608,7 @@ function msgHtml(m, i, streaming) {
   const body = m.role === "user" ? `<p>${esc(m.content).replace(/\n/g, "<br>")}</p>` : (m.error ? `<p class="err">${esc(m.error)}</p>` : renderAssistant(m.content, streaming));
   const last = i === current.messages.length - 1;
   const cut = last && m.finish === "length";
-  const meta = m.role === "assistant" && !streaming ? `<div class="meta">${m.stats ? `<span>${esc(m.stats)}</span>` : ""}${cut ? `<span class="err">cut off at the length limit</span><button class="primary" data-act="continue">Continue ▸</button>` : ""}<button data-act="copymsg" data-i="${i}">Copy</button>${last ? `<button data-act="retry">Retry</button>` : ""}</div>` : "";
+  const meta = m.role === "assistant" && !streaming ? `<div class="meta">${m.stats ? `<span>${esc(m.stats)}</span>` : ""}${m.dropped ? `<span class="err" title="The Xbox can hold about 8,000 tokens at once. Start a new chat and paste what matters if it seems to have forgotten.">⚠ ${m.dropped} earlier exchange${m.dropped > 1 ? "s" : ""} didn't fit and ${m.dropped > 1 ? "were" : "was"} left out</span>` : ""}${cut ? `<span class="err">cut off at the length limit</span><button class="primary" data-act="continue">Continue ▸</button>` : ""}<button data-act="copymsg" data-i="${i}">Copy</button>${last ? `<button data-act="retry">Retry</button>` : ""}</div>` : "";
   return `<div class="msg ${m.role}" data-i="${i}"><div class="av">${m.role === "user" ? "You" : "AI"}</div><div class="body"><div class="who">${esc(who)}</div><div class="content${streaming ? " typing" : ""}">${body}</div>${meta}</div></div>`;
 }
 function renderAssistant(c, streaming) {
@@ -681,15 +682,15 @@ async function continueReply(auto) {
   const reply = current.messages[idx];
   if (!reply || reply.role !== "assistant" || !reply.content) return;
   reply.autoCount = auto ? (reply.autoCount || 0) + 1 : 0;
-  reply.finish = "";
+  reply.finish =)XUI"
+    R"XUI( "";
   let base = reqHist.get(reply);
   if (!base) base = current.messages.slice(0, idx).filter(m => !m.error && !(m.auto && !m.content)).map(m => ({ role: m.role, content: m.role === "user" ? unBuild(m.content) : stripImages(m.content) }));
   const t = splitThink(reply.content);
   if (t.open) {
     const h = base.map(x => ({ ...x }));
     const u = h[h.length - 1];
-    u.content += "\n\nYo)XUI"
-    R"XUI(u already planned this:\n" + t.plan.slice(-6000) + "\n\nNow write the final answer following that plan.";
+    u.content += "\n\nYou already planned this:\n" + t.plan.slice(-6000) + "\n\nNow write the final answer following that plan.";
     reply.content = reply.content.replace(/\s*$/, "") + "\n</think>\n\n";
     await streamInto(reply, h, reply.model || $("#model").value, "Plan done, now writing", false, { append: true, keepHist: base });
     return;
@@ -733,6 +734,7 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
           if (j.error) throw new Error(j.error.message || "error");
           const ch = j.choices?.[0];
           if (ch?.finish_reason) reply.finish = ch.finish_reason;
+          if (j.usage?.x_dropped_turns) reply.dropped = j.usage.x_dropped_turns;
           const piece = ch?.delta?.content;
           if (piece) {
             if (!firstTok) { firstTok = performance.now(); live.tFirst = firstTok; }
@@ -858,14 +860,14 @@ function openPreview(code) {
 $("#pv-reload").onclick = () => openPreview(previewHtml);
 $("#pv-open").onclick = () => { const w = window.open(); if (w) { w.document.write(previewHtml); w.document.close(); } };
 
-// ---------- composer ----------
+// --------)XUI"
+    R"XUI(-- composer ----------
 function autoGrow() { const i = $("#input"); i.style.height = "auto"; i.style.height = Math.min(i.scrollHeight, 240) + "px"; }
 $("#input").addEventListener("input", autoGrow);
 $("#input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 $("#send").onclick = () => busy ? aborter?.abort() : send();
 document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
-  mode )XUI"
-    R"XUI(= c.dataset.mode;
+  mode = c.dataset.mode;
   document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
   $("#input").placeholder = mode === "web" ? "Ask something to look up on the web…" : mode === "image" ? "Describe the picture…" : mode === "build" ? "Describe the page or drawing to build…" : "Message the Xbox…";
   $("#modes").classList.toggle("build", mode === "build");
@@ -877,7 +879,7 @@ $("#menu").onclick = () => $("#side").classList.toggle("open");
 function closeSide() { $("#side").classList.remove("open"); }
 
 // ---------- models + status ----------
-const NICKNAMES = { "qwen35-9b": "Big Queef (Smart)", "qwen35-4b": "Queef (Coding)", "lfm25-350m": "Stickybeak (Images)", "lfm25-1.2b-instruct": "Stickybeak 1.2B (Images)", "phi4-mini": "Mo Farah (Fast)", "qwen25-coder-1.5b": "Qwen2.5 Coder 1.5B", "qwen3-1.7b": "Qwen3 1.7B" };
+const NICKNAMES = { "qwen35-9b-plus": "Big Queef+ (Smarter)", "qwen35-9b": "Big Queef (Smart)", "qwen35-4b": "Queef (Coding)", "lfm25-350m": "Stickybeak (Images)", "lfm25-1.2b-instruct": "Stickybeak 1.2B (Images)", "phi4-mini": "Mo Farah (Fast)", "qwen25-coder-1.5b": "Qwen2.5 Coder 1.5B", "qwen3-1.7b": "Qwen3 1.7B" };
 function nick(id) { return NICKNAMES[id] || id; }
 async function loadModels() {
   try {

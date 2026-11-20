@@ -61,6 +61,18 @@ PromptFit fit_prompt(const ChatFormat& fmt, const std::string& system,
                      const std::vector<ChatTurn>& turns, const std::string& user_text, int n_ctx,
                      int n_predict, const TokenCounter& count);
 
+// Fork: like fit_prompt, but the reply's room gives way before history does.
+// When the whole conversation fits with a smaller reply (at least |min_reply|
+// tokens), *n_predict_out is lowered to the room left and nothing is dropped:
+// a client continuing a cut-off reply is better served than one whose earlier
+// code silently vanished. Only when even |min_reply| does not fit are the
+// oldest turns dropped, with the reply at min(n_predict, min_reply).
+// *n_predict_out is n_predict when it already fits.
+PromptFit fit_prompt_keep_history(const ChatFormat& fmt, const std::string& system,
+                                  const std::vector<ChatTurn>& turns, const std::string& user_text,
+                                  int n_ctx, int n_predict, int min_reply,
+                                  const TokenCounter& count, int* n_predict_out);
+
 // Renders the tool transcript the way the GGUF template will. Tests pass a
 // stand-in; the LAN handler passes the template bridge. The schema is an
 // argument, not a message, so a trimmer cannot drop it by dropping history.

@@ -350,6 +350,23 @@
       ]
     },
     {
+      "_comment": "Fork addition 2026-11-20: Qwen3.5-9B IQ4_XS 3.60bpw (byteshape, Apache-2.0; 50% IQ3_XXS, 46% IQ4_XS, 4% Q5_K/Q6_K): the higher-quality 9B, all weight types on the D3D12 backend since 1.10.10. qwen35-9b (3.53 GB file) measured 4.3 GB in use on the GPU path, so ~4.8 GB expected: the largest that fits the 5 GB Game budget. Same qwen35 arch as qwen35-4b.",
+      "name": "qwen35-9b-plus",
+      "display": "Qwen3.5 9B+ (GGUF · GPU · best quality, tight on memory)",
+      "kind": "gguf",
+      "gpu_layers": 99,
+      "role": "coding",
+      "n_ctx": 8192,
+      "hf_base_url": "https://huggingface.co/byteshape/Qwen3.5-9B-GGUF/resolve/main",
+      "files": [
+        {
+          "filename": "Qwen3.5-9B-IQ4_XS-3.60bpw.gguf",
+          "approx_bytes": 4043231072,
+          "sha256": "b1667c17fea14d2e7fa9e9d11230088790bf7693bbf565b62b75a6ffff3e4603"
+        }
+      ]
+    },
+    {
       "_comment": "Phi-4-mini-instruct Q4_K_M (3.8B, MIT) — unsloth GGUF. Series S T3 PASS 2026-09-30 (#268): 11.2 tok/s decode, 33.1 prefill, 2765 MB peak, H9 6/8 vs llama32-3b 5/8 (bench/results/2026-09-30-catalogue-gates.csv). >2GB is fine on GGUF but must download straight from HF (GitHub release asset cap). Phi-3 template via chat_format_for (id must keep 'phi' and avoid 'gemma'/'llama'). kind:gguf, CPU-only, KV-reuse, routing disabled. n_ctx 4096 (console 1.6.0.1163, 2026-10-12): 3528-token prompt peak WorkingSetSize 3096 MB vs 2838 MB at 2048 (1515 tok), working set after context alloc 3038 MB; needle at 3547 tokens correct; agent-runtime 50-case eval 48/50 at both n_ctx. Prefill ~28 tok/s, so a full window costs ~2 min before the first token. Fork: gpu_layers 99 measured on Series X 2026-11-20 (256-token reply): qwen35-4b 9.7 -> ~16 tok/s, prefill 35 -> 55 tok/s; phi4-mini ~25 tok/s.",
       "name": "phi4-mini",
       "display": "Phi-4 mini (GGUF · CPU)",

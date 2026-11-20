@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGETS = [("iq3_xxs", "Iq3Xxs"), ("iq4_xs", "Iq4Xs")]
+TARGETS = [("iq3_xxs", "Iq3Xxs"), ("iq4_xs", "Iq4Xs"), ("q5_k", "Q5K")]
 WIDTHS = [64, 128]
 
 

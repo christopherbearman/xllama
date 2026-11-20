@@ -293,4 +293,48 @@ ToolTranscriptFit fit_tool_transcript(const std::vector<ChatMessage>& messages,
             fit.fits};
 }
 
+PromptFit fit_prompt_keep_history(const ChatFormat& fmt, const std::string& system,
+                                  const std::vector<ChatTurn>& turns, const std::string& user_text,
+                                  int n_ctx, int n_predict, int min_reply,
+                                  const TokenCounter& count, int* n_predict_out) {
+    if (n_predict_out)
+        *n_predict_out = n_predict;
+    PromptFit fit = fit_prompt(fmt, system, turns, user_text, n_ctx, n_predict, count);
+    if (!count || (fit.fits && fit.dropped == 0))
+        return fit;
+    const int floor_reply = std::min(n_predict, min_reply);
+    // Whole conversation, smaller reply.
+    PromptFit full;
+    full.prompt = fmt.render_prompt(system, turns, user_text);
+    full.n_tokens = count(full.prompt);
+    if (full.n_tokens >= 0) {
+        // Largest reply that still fits: budget_fits is monotone in n_predict.
+        int lo = floor_reply, hi = n_predict, best = -1;
+        while (lo <= hi) {
+            const int mid = lo + (hi - lo) / 2;
+            if (budget_fits(full.n_tokens, mid, n_ctx)) {
+                best = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        if (best >= floor_reply) {
+            full.fits = true;
+            if (n_predict_out)
+                *n_predict_out = best;
+            return full;
+        }
+    }
+    // Even the floor does not fit with everything: drop the oldest turns, but
+    // only as many as the floor reply needs.
+    PromptFit trimmed = fit_prompt(fmt, system, turns, user_text, n_ctx, floor_reply, count);
+    if (trimmed.fits) {
+        if (n_predict_out)
+            *n_predict_out = floor_reply;
+        return trimmed;
+    }
+    return fit;
+}
+
 } // namespace xllama

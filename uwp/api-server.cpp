@@ -627,6 +627,9 @@ class SseStream {
         }
     }
 
+    // Fork: older turns the server had to drop to fit n_ctx (reported in usage).
+    void set_dropped(int n) { m_dropped = n; }
+
     void finish(const wchar_t* reason, int prompt_tokens, int completion_tokens) {
         if (m_finished)
             return;
@@ -643,6 +646,8 @@ class SseStream {
             usage.Insert(L"completion_tokens", JsonValue::CreateNumberValue(completion_tokens));
             usage.Insert(L"total_tokens",
                          JsonValue::CreateNumberValue(prompt_tokens + completion_tokens));
+            if (m_dropped > 0)
+                usage.Insert(L"x_dropped_turns", JsonValue::CreateNumberValue(m_dropped));
             send_chunk(JsonObject{}, JsonValue::CreateStringValue(winrt::hstring(reason)), &usage);
             end();
         } catch (...) {
@@ -747,6 +752,7 @@ class SseStream {
     std::string m_pending; // trailing bytes of a split UTF-8 sequence
     std::atomic<bool>* m_abort = nullptr;
     bool m_finished = false;
+    int m_dropped = 0;
 };
 
 void write_cors_preflight(StreamSocket const& socket) {
@@ -1233,10 +1239,23 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
     // n_ctx (xllama::fit_prompt). Before this, a long conversation reached
     // Session::generate and came back as a 500 — a client error reported as a
     // server one, and only after paying the tokenization.
+    int dropped_turns = 0;
     {
-        const ::xllama::PromptFit fit = ::xllama::fit_prompt(
-            fmt, system, history, final_user, policy_n_ctx, gp.n_predict,
-            [session](const std::string& text) { return session->count_tokens(text); });
+        // Fork: shrink the reply's room (down to 1024 tokens) before dropping
+        // history, so a "fix this code" turn keeps the code; the page continues
+        // a reply cut short by the smaller cap.
+        int fitted_n_predict = gp.n_predict;
+        const ::xllama::PromptFit fit = ::xllama::fit_prompt_keep_history(
+            fmt, system, history, final_user, policy_n_ctx, gp.n_predict, 1024,
+            [session](const std::string& text) { return session->count_tokens(text); },
+            &fitted_n_predict);
+        if (fit.fits && fitted_n_predict != gp.n_predict) {
+            ::xllama::log_output("[xllama] api: reply cap " + std::to_string(gp.n_predict) +
+                                 " -> " + std::to_string(fitted_n_predict) +
+                                 " to keep the whole conversation in n_ctx\n");
+            gp.n_predict = fitted_n_predict;
+        }
+        dropped_turns = fit.dropped;
         if (!fit.fits) {
             // Nothing older left to drop: the final user message alone does not fit.
             // That is the client's input, hence 400.
@@ -1296,6 +1315,7 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
         }
         try {
             sse = std::make_unique<SseStream>(socket, model, &abort);
+            sse->set_dropped(dropped_turns);
         } catch (...) {
             status = "500 Internal Server Error";
             return std::string(); // the 200 head is already out
@@ -1416,6 +1436,7 @@ std::string models_json() {
         m.Insert(L"owned_by", JsonValue::CreateStringValue(L"xllama"));
         // Fork: friendly names (Open WebUI shows "name" when present).
         static const std::pair<const char*, const char*> kNick[] = {
+            {"qwen35-9b-plus", "Big Queef+ (Smarter)"},
             {"qwen35-9b", "Big Queef (Smart)"},
             {"qwen35-4b", "Queef (Coding)"},
             {"lfm25-350m", "Stickybeak (Images)"},

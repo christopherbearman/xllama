@@ -118,7 +118,7 @@ runs:
         }
         Write-Host "Both patched DLLs match NuGet installs."
 
-    - name: Compile fork D3D12 shaders (IQ3_XXS / IQ4_XS)
+    - name: Compile fork D3D12 shaders (IQ3_XXS / IQ4_XS / Q5_K)
       shell: pwsh
       run: python scripts/compile-fork-shaders.py
 
@@ -126,7 +126,9 @@ runs:
       uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact }}-shaders
-        path: shaders/generated/ggml_d3d12_mmv_iq*_dxil.h
+        path: |
+          shaders/generated/ggml_d3d12_mmv_iq*_dxil.h
+          shaders/generated/ggml_d3d12_mmv_q5_k*_dxil.h
 
     - name: Build UWP package
       shell: pwsh
