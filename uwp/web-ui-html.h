@@ -229,14 +229,19 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
 "use strict";
 // Same origin when served by the Xbox; "?api=http://<xbox>:11434" for testing from a file.
 const API = new URLSearchParams(location.search).get("api") || "";
-const DEFAULT_SYSTEM = "You are an expert web developer and helpful assistant. Write clean, modern HTML, CSS and JavaScript when asked for code, with complete code blocks and a brief explanation. If web search results are provided, base factual answers on them and cite them like [1].";
+const OLD_DEFAULT_SYSTEM = "You are an expert web developer and helpful assistant. Write clean, modern HTML, CSS and JavaScript when asked for code, with complete code blocks and a brief explanation. If web search results are provided, base factual answers on them and cite them like [1].";
+const DEFAULT_SYSTEM = "You are a friendly, practical assistant for a UK small business owner. Always respond to the user's LATEST message. If it is a greeting or a short reply such as 'ok' or 'thanks', answer briefly and naturally. Never repeat or rewrite an earlier answer unless the user asks you to. Use British English and £. When asked for code, give complete code blocks with a brief explanation. If web search results are provided, base factual answers on them and cite them like [1].";
 const $ = s => document.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
 };
 let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "", autoContinue: true, think: true, autoCheck: true, imageThink: false }, LS.get("xa.settings", {}));
+if (settings.system === OLD_DEFAULT_SYSTEM) settings.system = DEFAULT_SYSTEM;
 const MAX_AUTO_CONTINUE = 4;
+const NO_REPEAT_NOTE = "\n\n(Reply to this message only. Do not repeat or rewrite your previous answer.)";
+function shingles(t) { const w = (answerOf(t) || "").toLowerCase().replace(/[^a-z0-9£ ]+/g, " ").split(/\s+/).filter(Boolean); const set = new Set(); for (let i = 0; i + 2 < w.length; i++) set.add(w[i] + " " + w[i + 1] + " " + w[i + 2]); return set; }
+function similar(a, b) { const A = shingles(a), B = shingles(b); if (A.size < 15 || B.size < 15) return 0; let n = 0; A.forEach(x => { if (B.has(x)) n++; }); return n / Math.min(A.size, B.size); }
 const MAX_FIX_ROUNDS = 2;
 const IMAGE_PROMPT_SYSTEM = "You write prompts for a Stable Diffusion image model (DreamShaper). Turn the user's description into ONE prompt of at most 60 words: the main subject first, then setting, composition and camera angle, lighting, colours, mood and art style, as comma-separated phrases. Keep everything the user asked for. Reply with the prompt only: no quotes, no explanation.";
 const BUILD_SYSTEM = `You are an expert front-end developer. Reply with ONE complete, self-contained HTML file in a single \`\`\`html code block (CSS in <style>, JavaScript in <script>), then at most two sentences of explanation.
@@ -318,7 +323,8 @@ function xaInject(CHECK, TOKEN) {
       var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
       var all = b.querySelectorAll("*"), items = [];
       for (var i = 0; i < all.length && i < 2500; i++) {
-        var el = all[i]; if (el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) continue;
+        var el = all[i]; if (el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) co)XUI"
+    R"XUI(ntinue;
         var r = el.getBoundingClientRect(); var area = r.width * r.height;
         if (area < W * H * 0.015 || !vis(el) || !painted(el)) continue;
         items.push({ el: el, area: area });
@@ -333,8 +339,7 @@ function xaInject(CHECK, TOKEN) {
       var rep = [];
       items.forEach(function (it) {
         var el = it.el; if (rep.some(function (p) { return p.contains(el); })) return;
-        var r = el.getBoundingClientRect(), top = r.top + scrollY, left = r.left + scrollX, right = left + r.width, bottom)XUI"
-    R"XUI( = top + r.height;
+        var r = el.getBoundingClientRect(), top = r.top + scrollY, left = r.left + scrollX, right = left + r.width, bottom = top + r.height;
         var oL = Math.max(0, -left), oT = Math.max(0, -top), oR = hidX ? Math.max(0, right - W) : 0, oB = hidY ? Math.max(0, bottom - H) : 0;
         var vw = Math.max(0, r.width - oL - oR), vh = Math.max(0, r.height - oT - oB), frac = 1 - (vw * vh) / (r.width * r.height);
         if (frac > 0.15 && !clipper(el)) {
@@ -478,7 +483,8 @@ function liveStart(stage, think) {
   clearInterval(live.timer); live.timer = setInterval(liveTick, 250); liveTick();
 }
 function liveSet(stage, kind) {
-  live.stage = stage; $("#live .stage").textContent = stage;
+  live.stage = stage; $("#live .stage").textConten)XUI"
+    R"XUI(t = stage;
   const dot = $("#live span"); dot.className = kind === "pulse" ? "orb" : "spin";
 }
 function liveTick() {
@@ -501,8 +507,7 @@ function saveConvs() {
   // Storage full (images are large): drop embedded images from older chats.
   for (let i = convs.length - 1; i >= 0; i--) {
     for (const m of convs[i].messages) m.content = stripImages(m.content);
-    if (LS.set("xa.convs", convs)) { toast("Storage full: older pictu)XUI"
-    R"XUI(res were removed from saved chats"); return; }
+    if (LS.set("xa.convs", convs)) { toast("Storage full: older pictures were removed from saved chats"); return; }
   }
 }
 function stripImages(t) { return answerOf(t || "").replace(/!\[([^\]\n]*)\]\(data:[^)]*\)/g, "[image]"); }
@@ -682,7 +687,8 @@ async function continueReply(auto) {
   if (t.open) {
     const h = base.map(x => ({ ...x }));
     const u = h[h.length - 1];
-    u.content += "\n\nYou already planned this:\n" + t.plan.slice(-6000) + "\n\nNow write the final answer following that plan.";
+    u.content += "\n\nYou already planned this:\n" + t.plan.slice(-6000) + "\n\nNow write the final answer following )XUI"
+    R"XUI(that plan.";
     reply.content = reply.content.replace(/\s*$/, "") + "\n</think>\n\n";
     await streamInto(reply, h, reply.model || $("#model").value, "Plan done, now writing", false, { append: true, keepHist: base });
     return;
@@ -695,7 +701,7 @@ async function continueReply(auto) {
 async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   reqHist.set(reply, opt.keepHist || history);
   const body = {
-    model, stream: true, temperature: settings.temperature, max_tokens: opt.maxTokens || settings.max_tokens,
+    model, stream: true, temperature: opt.temperature ?? settings.temperature, max_tokens: opt.maxTokens || settings.max_tokens,
     messages: [{ role: "system", content: opt.system || (reply.build ? BUILD_SYSTEM : (settings.system || DEFAULT_SYSTEM)) }, ...history]
   };
   if (opt.think) body.think = true;
@@ -703,8 +709,7 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   liveStart(waitLabel, opt.think);
   setLiveStatus("");
   const t0 = performance.now(); let firstTok = 0; let chunks = 0;
-  c)XUI"
-    R"XUI(onst base = opt.append ? reply.content : "";
+  const base = opt.append ? reply.content : "";
   let added = "";
   reply.stopped = false;
   aborter = new AbortController();
@@ -756,6 +761,22 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
     current.updated = Date.now(); saveConvs(); renderConvList(); renderMsgs(); poll();
   }
   if (opt.noAuto) return;
+  // Small models sometimes copy their previous answer instead of replying to a
+  // short message ("hello", "ok"): detect a near-copy and retry once with a nudge.
+  if (!reply.build && !isImage && !opt.append && !opt.noRepeatRetry && !reply.error && !reply.stopped) {
+    const idx = current.messages.indexOf(reply);
+    let prev = null; for (let i = idx - 1; i >= 0; i--) if (current.messages[i].role === "assistant" && !current.messages[i].error) { prev = current.messages[i]; break; }
+    if (prev && similar(prev.content, reply.content) > 0.6) {
+      const h = history.map(x => ({ ...x })); const u = h[h.length - 1];
+      if (u && u.role === "user") {
+        u.content += NO_REPEAT_NOTE;
+        reply.content = ""; reply.finish = "";
+        await streamInto(reply, h, model, "It repeated itself, asking again", false, { noRepeatRetry: true, temperature: Math.min(1, settings.temperature + 0.4), keepHist: history });
+        reply.stats = (reply.stats || "") + " · retried (it repeated its last answer)"; saveConvs(); renderMsgs();
+        return;
+      }
+    }
+  }
   if (reply.finish === "length" && !reply.error && settings.autoContinue && (reply.autoCount || 0) < MAX_AUTO_CONTINUE) {
     liveStart("Hit the length limit, continuing automatically"); liveSet("Hit the length limit, continuing automatically", "pulse");
     setTimeout(() => continueReply(true), 700);
@@ -843,7 +864,8 @@ $("#input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shift
 $("#send").onclick = () => busy ? aborter?.abort() : send();
 document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
   mode = c.dataset.mode;
-  document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
+  document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", )XUI"
+    R"XUI(x === c));
   $("#input").placeholder = mode === "web" ? "Ask something to look up on the web…" : mode === "image" ? "Describe the picture…" : mode === "build" ? "Describe the page or drawing to build…" : "Message the Xbox…";
   $("#modes").classList.toggle("build", mode === "build");
   $("#modes").classList.toggle("image", mode === "image");
@@ -877,8 +899,7 @@ async function poll() {
     $("#st-mem").textContent = `${(s.app_memory_usage_mb / 1024).toFixed(1)} / ${(s.app_memory_limit_mb / 1024).toFixed(1)} GB`;
     $("#st-web").textContent = s.web_search_provider || "–";
     $("#st-ver").textContent = s.version || "–";
-    if (s.app_memory_limit_)XUI"
-    R"XUI(mb < 2048 && !poll.warned) { poll.warned = true; toast("xllama isn't in Game mode: big models won't load. Dev Home → xllama → View details → App type: Game"); }
+    if (s.app_memory_limit_mb < 2048 && !poll.warned) { poll.warned = true; toast("xllama isn't in Game mode: big models won't load. Dev Home → xllama → View details → App type: Game"); }
   } catch {
     $("#banner").style.display = "block"; $("#dot").style.background = "var(--bad)"; $("#st-state").textContent = "offline";
   }
