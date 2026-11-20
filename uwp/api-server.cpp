@@ -26,6 +26,7 @@
     #include "web-fetch.h"
     #include "web-ui-html.h"
     #include "xllama/think_mode.h"
+    #include "xllama/op_profile.h"
     #include "xllama/api_activity.h"
     #include "xllama/api_connection.h"
     #include "xllama/api_policy.h"
@@ -2441,6 +2442,25 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
             const std::string provider = ::xllama::uwp::web_search_provider();
             ::xllama::log_output("[xllama] api: web search provider set to " + provider + "\n");
             write_response(socket, "200 OK", "{\"provider\":" + json_string_value(provider) + "}");
+            return;
+        }
+        if (req.method == "POST" && req.path == "/v1/debug/profile") {
+            // Fork: per-op timing on/off. Unloads the resident model so the next
+            // session is created with (or without) the timing callback.
+            JsonObject b{nullptr};
+            const bool on = JsonObject::TryParse(winrt::to_hstring(req.body), b) && b &&
+                            b.GetNamedBoolean(L"on", false);
+            auto compute_permit = acquire_compute_job_or_busy();
+            std::unique_lock<std::mutex> lk = acquire_hub_or_busy();
+            if (!compute_permit || !lk.owns_lock()) {
+                write_response(socket, ::xllama::kApiBusyStatus, error_json("busy"));
+                return;
+            }
+            ::xllama::op_profile_enabled().store(on);
+            ::xllama::session_hub().reset_locked();
+            ::xllama::log_output(std::string("[xllama] api: op profiling ") + (on ? "on" : "off") +
+                                 " (model unloaded; applies from the next chat)\n");
+            write_response(socket, "200 OK", std::string("{\"profile\":") + (on ? "true" : "false") + "}");
             return;
         }
         if (req.method == "POST" && req.path == "/v1/debug/unload") {

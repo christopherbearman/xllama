@@ -438,6 +438,7 @@ std::unique_ptr<Session> create_ort(const SessionParams& sp, std::string* err) {
     #include "decode_loop.h" // shared prefill + generation loops; needs llama.h
     #include "llama_gpu.h"
     #include "xllama/ggml_d3d12.h" // fork: per-phase GPU counters in chat
+    #include "xllama/op_profile.h"  // fork: per-op-type timing (debug switch)
     #include "sampler_chain.h" // shared sampler chain (#125); needs llama.h
     #include "xllama/llama_raii.h"
 
@@ -518,6 +519,11 @@ class LlamaSession final : public Session {
                 cparams.n_ubatch = static_cast<uint32_t>(m_n_ubatch);
             apply_gguf_gpu_context(m_gpu_layers, cparams,
                                    gguf_gpu_outputs_max(for_embedding, m_prompt_lookup));
+            if (op_profile_enabled().load()) {
+                cparams.cb_eval = &op_profile_cb; // fork: time every op (debug switch)
+                cparams.cb_eval_user_data = nullptr;
+                log_output("[xllama] op-profile: on for this session (every op timed)\n");
+            }
             if (for_embedding) {
                 // Non-causal embedding graphs cannot split a sequence into
                 // physical micro-batches (llama.cpp asserts instead of failing).
@@ -878,6 +884,8 @@ class LlamaSession final : public Session {
             if (ggml_d3d12_take_stats(&ps))
                 log_output(format_d3d12_phase("prefill", ps));
         }
+        if (op_profile_enabled().load())
+            log_output(op_profile_take("prefill"));
         const SamplingConfig sc = gp.sampling();
         if (full_prompt || !m_sampler || !same_chain(m_sampler_cfg, sc)) {
             const llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
@@ -955,6 +963,8 @@ class LlamaSession final : public Session {
                 log_output(db);
             }
         }
+        if (op_profile_enabled().load())
+            log_output(op_profile_take("decode"));
         const int n_generated = dlr.n_generated;
         const bool stopped_by_seq = dlr.ended_with_stop;
 
