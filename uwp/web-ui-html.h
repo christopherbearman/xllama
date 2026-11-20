@@ -74,6 +74,25 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent2)}
 .meta{font-size:12px;color:var(--muted);margin-top:4px;display:flex;gap:10px;flex-wrap:wrap}
 .meta button{font-size:12px;padding:1px 8px}
 .err{color:#ffb4b6}
+#live{display:none;align-items:center;gap:10px;margin:0 0 8px;padding:7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--panel);font-size:13px;color:var(--text);position:relative;overflow:hidden}
+#live.on{display:flex}
+#live::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:35%;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:sweep 1.6s linear infinite}
+@keyframes sweep{from{transform:translateX(-100%)}to{transform:translateX(300%)}}
+#live .spin{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;flex:none}
+#live .orb{width:10px;height:10px;border-radius:50%;background:var(--accent);animation:pulse 1.1s ease-in-out infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:.3;transform:scale(.7)}50%{opacity:1;transform:scale(1.15)}}
+#live .stage{font-weight:600}
+#live .num{color:var(--muted);font-variant-numeric:tabular-nums}
+details.think{border:1px dashed var(--line);border-radius:var(--r);padding:6px 10px;margin:4px 0 10px;color:var(--muted);font-size:13px}
+details.think summary{cursor:pointer}
+details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:auto}
+.note{font-size:13px;color:var(--muted);border-left:3px solid var(--warn);padding:4px 10px;margin:6px 0 14px 44px}
+.note.ok{border-color:var(--accent)}
+.note ol{margin:6px 0 0 18px}
+.opt{display:none;align-items:center;gap:5px;font-size:12px;color:var(--muted);margin-left:6px;cursor:pointer}
+#modes.build .opt{display:flex}
+#modes{flex-wrap:wrap;align-items:center}
 .typing::after{content:"▍";animation:b 1s steps(1) infinite;color:var(--accent)}
 @keyframes b{50%{opacity:0}}
 #empty{max-width:640px;margin:10vh auto 0;text-align:center;color:var(--muted)}
@@ -149,12 +168,16 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent2)}
       <button class="chip on" data-mode="chat">Chat</button>
       <button class="chip" data-mode="web">🌐 Web search</button>
       <button class="chip" data-mode="image">🖼 Image</button>
+      <button class="chip" data-mode="build" title="Websites and drawings: coding rules, thinking first, automatic check">🛠 Build</button>
+      <label class="opt" title="Let the model plan before writing (slower, better layouts)"><input type="checkbox" id="o-think"> 🧠 Think first</label>
+      <label class="opt" title="Open the page in a hidden browser, look for problems and ask for fixes"><input type="checkbox" id="o-check"> 🔍 Auto-check &amp; fix</label>
     </div>
+    <div id="live"><span class="spin"></span><span class="stage"></span><span class="num" id="live-num"></span></div>
     <div id="inrow">
       <textarea id="input" rows="1" placeholder="Message the Xbox…"></textarea>
       <button class="primary" id="send">Send</button>
     </div>
-    <div id="hint">Enter to send · Shift+Enter for a new line · or start a message with <code>/web</code> or <code>/image</code></div>
+    <div id="hint">Enter to send · Shift+Enter for a new line · or start a message with <code>/web</code>, <code>/image</code> or <code>/build</code></div>
   </div></div>
 </main>
 
@@ -167,7 +190,8 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent2)}
       <div class="r"><input type="range" id="s-temp" min="0" max="1.5" step="0.1" style="flex:1"><b id="s-temp-v"></b></div>
       <div class="small">0.2–0.4 for code; higher for creative writing.</div></div>
     <div class="field"><label>Max reply length (tokens)</label><input type="number" id="s-max" min="64" max="8192" step="64">
-      <div class="r" style="margin-top:8px"><label style="margin:0;display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="s-auto"> Auto-continue replies that hit the limit (up to 4 times)</label></div></div>
+      <div class="r" style="margin-top:8px"><label style="margin:0;display:flex;gap:8px;align-items:center;color:var(--text)"><inp)XUI"
+    R"XUI(ut type="checkbox" id="s-auto"> Auto-continue replies that hit the limit (up to 4 times)</label></div></div>
     <div class="field"><label>Download a model to the Xbox</label>
       <div class="r"><select id="s-pull">
         <option value="qwen35-4b">Qwen3.5 4B — best coding (2.7 GB)</option>
@@ -201,15 +225,25 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent2)}
 "use strict";
 // Same origin when served by the Xbox; "?api=http://<xbox>:11434" for testing from a file.
 const API = new URLSearchParams(location.search).get("api") || "";
-const DEFAULT_SYSTEM = "You are an expert web developer and helpful assistant. Write clean, modern HTML, CSS and JavaScript when asked for code, with complete code blocks and a brief explanation. If web search results are )XUI"
-    R"XUI(provided, base factual answers on them and cite them like [1].";
+const DEFAULT_SYSTEM = "You are an expert web developer and helpful assistant. Write clean, modern HTML, CSS and JavaScript when asked for code, with complete code blocks and a brief explanation. If web search results are provided, base factual answers on them and cite them like [1].";
 const $ = s => document.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
 };
-let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "", autoContinue: true }, LS.get("xa.settings", {}));
+let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "", autoContinue: true, think: true, autoCheck: true }, LS.get("xa.settings", {}));
 const MAX_AUTO_CONTINUE = 4;
+const MAX_FIX_ROUNDS = 2;
+const BUILD_SYSTEM = `You are an expert front-end developer. Reply with ONE complete, self-contained HTML file in a single \`\`\`html code block (CSS in <style>, JavaScript in <script>), then at most two sentences of explanation.
+Rules:
+- Pictures, illustrations, icons, clocks, scenes and diagrams: draw them with inline SVG using a viewBox (for example viewBox="0 0 800 600"). Place every shape with explicit coordinates. Never build pictures out of absolutely positioned divs.
+- Anything that rotates (clock hands, dials, wheels) is an SVG element turned with transform="rotate(angle cx cy)" around one fixed centre point.
+- Repeated items (clock numerals and ticks, stars, flames, cards) are generated with a JavaScript loop, not written out one by one.
+- Page layout (headers, sections, columns, cards, forms) uses normal flow with flexbox or grid. Use position:absolute only for small decorations inside a position:relative parent.
+- Keep everything inside the visible page: no negative offsets that push content off screen, no fixed widths wider than the screen. Make it responsive.
+- Draw scenes back to front: background first, then large objects, then details on top, and make sure the main subject is not hidden behind anything else.
+- Every CSS class you style must exist in the HTML with exactly the same name.
+- No external images; use SVG or CSS. Use realistic text, never lorem ipsum.`;
 const CONTINUE_PROMPT = "Your previous reply was cut off by the length limit. Continue it exactly from the point where it stopped, mid-line if needed. Do not repeat anything already written, do not add an introduction, and do not start a new code block.";
 let convs = LS.get("xa.convs", []);
 let current = null;
@@ -221,6 +255,199 @@ function toast(t) { const e = $("#toast"); e.textContent = t; e.style.display = 
 function esc(s) { return s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
+// ---------- page checker (runs inside a sandboxed frame) ----------
+function xaInject(CHECK, TOKEN) {
+  var issues = [], seen = {};
+  function add(sev, msg) { if (seen[msg]) return; seen[msg] = 1; if (issues.length < 14) issues.push({ sev: sev, msg: msg }); }
+  try { window.localStorage.getItem("x"); } catch (x) {
+    var mk = function () { var d = {}; return { getItem: function (k) { return k in d ? d[k] : null; }, setItem: function (k, v) { d[k] = String(v); }, removeItem: function (k) { delete d[k]; }, clear: function () { d = {}; }, key: function (i) { return Object.keys(d)[i] || null; }, get length() { return Object.keys(d).length; } }; };
+    try { Object.defineProperty(window, "localStorage", { value: mk(), configurable: true }); Object.defineProperty(window, "sessionStorage", { value: mk(), configurable: true }); } catch (y) { }
+  }
+  if (!CHECK) return;
+  window.addEventListener("error", function (e) { if (e.target && e.target !== window) return; add("major", "JavaScript error: " + e.message + (e.lineno ? " (line " + e.lineno + ")" : "")); }, true);
+  window.addEventListener("unhandledrejection", function (e) { add("major", "Unhandled promise error: " + ((e.reason && e.reason.message) || e.reason)); });
+  var ce = console.error; console.error = function () { try { add("minor", "console.error: " + [].map.call(arguments, String).join(" ").slice(0, 200)); } catch (x) { } return ce.apply(console, arguments); };
+  var done = false;
+  function desc(el) {
+    var s = "<" + el.tagName.toLowerCase(); if (el.id) s += ' id="' + el.id + '"';
+    var c = (el.getAttribute("class") || "").trim(); if (c) s += ' class="' + c.split(/\s+/).slice(0, 3).join(" ") + '"';
+    s += ">"; var t = (el.textContent || "").trim().replace(/\s+/g, " ");
+    if (t && el.tagName.toLowerCase() !== "svg") s += ' "' + t.slice(0, 30) + (t.length > 30 ? "…" : "") + '"';
+    return s;
+  }
+  function vis(el) {
+    var cs = getComputedStyle(el); if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity) < 0.05) return false;
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false; return true;
+  }
+  function alpha(bg) { if (!bg || bg === "transparent") return 0; var m = bg.match(/rgba?\(([^)]+)\)/); if (!m) return 1; var p = m[1].split(/[ ,\/]+/).filter(Boolean); return p.length > 3 ? parseFloat(p[3]) : 1; }
+  function painted(el, strong) {
+    var tag = el.tagName.toLowerCase();
+    if (/^(img|svg|canvas|video|iframe)$/.test(tag)) return true;
+    if (!strong && /^(input|textarea|select|button)$/.test(tag)) return true;
+    var cs = getComputedStyle(el);
+    if (alpha(cs.backgroundColor) > (strong ? 0.6 : 0.3)) return true;
+    if (cs.backgroundImage && cs.backgroundImage !== "none") return true;
+    if (strong) return false;
+    for (var n = el.firstChild; n; n = n.nextSibling) if (n.nodeType === 3 && n.nodeValue.trim().length > 2) return true;
+    return false;
+  }
+  function clipper(el) {
+    for (var p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+      var cs = getComputedStyle(p); if (cs.overflowX !== "visible" || cs.overflowY !== "visible") return p;
+    } return null;
+  }
+  function run() {
+    if (done) return; done = true;
+    try {
+      var W = innerWidth, H = innerHeight, de = document.documentElement, b = document.body;
+      if (!b) { add("major", "The page has no <body>."); return post(); }
+      var bcs = getComputedStyle(b), dcs = getComputedStyle(de);
+      var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
+      var all = b.querySelectorAll("*"), items = [];
+      for (var i = 0; i < all.length && i < 2500; i++) {
+        var el = all[i]; if (el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) continue;
+        var r = el.getBoundingClientRect(); var area = r.width * r.height;
+        if (area < W * H * 0.015 || !vis(el) || !painted(el)) continue;
+        items.push({ el: el, area: area });
+      }
+      var text = (b.innerText || "").trim();
+      if (!items.length && text.length < 3) add("major", "The page appears blank: nothing visible is drawn.");
+      var sw = Math.max(de.scrollWidth, b.scrollWidth);
+      if (sw > W + 8 && !hidX) {
+        var cul = []; for (var k = 0; k < all.length && cul.length < 2; k++) { var rr = all[k].getBoundingClientRect(); if (rr.right > W + 8 && rr.width < sw && !clipper(all[k]) && vis(all[k])) cul.push(desc(all[k])); }
+        add("major", "The page is wider than the screen (" + sw + "px in a " + W + "px window) so it scrolls sideways" + (cul.length ? "; it is caused by " + cul.join(" and ") : "") + ".");
+      }
+      var rep = [];
+      items.forEach(function (it) {
+        var el = it.el; if (rep.some(function (p) { return p.contains(el); })) return;
+        var r = el.getBoundingClientRect(), top = r.top + scrollY, left = r.left + scrollX, right = left + r.width, bottom = top + r.height;
+        var oL = Math.max(0, -left), oT = Math.max(0, -top), oR = hidX ? Math.max(0, right - W) : 0, oB = hidY ? Math.max(0, bottom - H) : 0;
+        var vw = Math.max(0, r.width - oL - oR), vh = Math.max(0, r.height - oT - oB), frac = 1 - (vw * vh) / (r.width * r.height);
+        if (frac > 0.15 && !clipper(el)) {
+          var where = []; if (oT) where.push("top"); if (oL) where.push("left"); if (oR) where.push("right"); if (oB) where.push("bottom");
+          add("major", desc(el) + " sticks out past the " + where.join(" and ") + " edge of the page, so about " + Math.round(frac * 100) + "% of it is cut off.");
+          rep.push(el);
+        }
+      });
+      var docH = Math.max(de.scrollHeight, b.scrollHeight), checked = new Set(), sy0 = scrollY;
+      for (var s = 0; s < 6; s++) {
+        var y = s * H * 0.8; if (s && y >= docH - H * 0.2) break;
+        window.scrollTo({ top: y, left: 0, behavior: "instant" });
+        items.forEach(function (it) {
+          var el = it.el; if (checked.has(el)) return;
+          var r = el.getBoundingClientRect();
+          var x0 = Math.max(r.left, 0), x1 = Math.min(r.right, W), y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, H);
+          if (x1 - x0 < 8 || y1 - y0 < 8 || (x1 - x0) * (y1 - y0) < 0.4 * Math.min(it.area, W * H * 0.5)) return;
+          checked.add(el);
+          var tot = 0, own = 0, by = new Map();
+          for (var gx = 0; gx < 5; gx++) for (var gy = 0; gy < 5; gy++) {
+            var px = x0 + 2 + (x1 - x0 - 4) * (gx + 0.5) / 5, py = y0 + 2 + (y1 - y0 - 4) * (gy + 0.5) / 5;
+            var hit = document.elementFromPoint(px, py); if (!hit) continue; tot++;
+            if (hit === el || el.contains(hit) || hit.contains(el)) { own++; continue; }
+            var root = hit; while (root.parentElement && !root.parentElement.contains(el)) root = root.parentElement;
+            by.set(root, (by.get(root) || 0) +)XUI"
+    R"XUI( 1);
+          }
+          if (tot < 10 || (tot - own) / tot <= 0.5) return;
+          var best = null, bn = 0; by.forEach(function (n, k) { if (n > bn) { bn = n; best = k; } });
+          if (!best) return;
+          var pct = Math.round((tot - own) / tot * 100);
+          add(painted(best, true) ? "major" : "minor", desc(el) + " is mostly hidden behind " + desc(best) + " (about " + pct + "% covered).");
+        });
+      }
+      window.scrollTo({ top: sy0, left: 0, behavior: "instant" });
+      var unused = [], st = /\.(is-|has-)?(open|opened|show|shown|active|visible|hidden|hide|selected|scrolled|sticky|fixed|fade|in|out|collapsed|expanded|error|success|valid|invalid|dark|light|loading|loaded|done|playing|paused|current|disabled|enabled|on|off|toggled|animate|animated|focus|focused|checked|clicked|hover|dragging|flipped)\b/i;
+      var walk = function (rules) {
+        for (var j = 0; j < rules.length && unused.length < 8; j++) {
+          var ru = rules[j]; if (ru.cssRules && !ru.selectorText) { walk(ru.cssRules); continue; }
+          if (!ru.selectorText) continue;
+          ru.selectorText.split(",").forEach(function (sel) {
+            sel = sel.trim(); if (unused.length >= 8 || !/[.#]/.test(sel) || st.test(sel)) return;
+            var s2 = sel.replace(/::?[\w-]+(\([^)]*\))?/g, function (m) { return /^:(nth-|first-|last-|only-|not|is|where|has|root|empty)/.test(m) ? m : ""; }).trim();
+            if (!s2) return;
+            try { if (!document.querySelector(s2)) unused.push(sel); } catch (e) { }
+          });
+        }
+      };
+      for (var q = 0; q < document.styleSheets.length; q++) { try { walk(document.styleSheets[q].cssRules); } catch (e) { } }
+      if (unused.length) add("minor", "These CSS rules match nothing in the page, so they have no effect (check the class names and the HTML structure match): " + unused.join(", "));
+    } catch (e) { add("minor", "checker error: " + e.message); }
+    post();
+  }
+  function post() { try { parent.postMessage({ xa: TOKEN, issues: issues }, "*"); } catch (e) { } }
+  window.addEventListener("load", function () { setTimeout(run, 1500); });
+  setTimeout(run, 6000);
+}
+
+function injectInto(html, check, token) {
+  const doc = /<html|<!doctype/i.test(html) ? html : `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>${html}</body></html>`;
+  const tag = "<script>(" + xaInject.toString().replace(/\n\s*/g, " ") + ")(" + (check ? "true" : "false") + "," + JSON.stringify(token || "") + ");<\/script>";
+  const m = doc.match(/<head[^>]*>/i);
+  if (m) return doc.replace(m[0], m[0] + tag);
+  const h = doc.match(/<html[^>]*>/i);
+  return h ? doc.replace(h[0], h[0] + "<head>" + tag + "</head>") : tag + doc;
+}
+function checkPage(html) {
+  return new Promise(resolve => {
+    const token = uid();
+    const box = document.createElement("div");
+    box.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;z-index:-1";
+    const f = document.createElement("iframe");
+    f.setAttribute("sandbox", "allow-scripts");
+    f.style.cssText = "width:1280px;height:800px;border:0";
+    let finished = false;
+    const end = r => { if (finished) return; finished = true; window.removeEventListener("message", on); clearTimeout(t); box.remove(); resolve(r); };
+    const on = e => { if (e.data && e.data.xa === token) end(e.data.issues || []); };
+    window.addEventListener("message", on);
+    const t = setTimeout(() => end(null), 12000);
+    f.srcdoc = injectInto(html, true, token);
+    box.appendChild(f); document.body.appendChild(box);
+  });
+}
+
+// ---------- thinking ----------
+function splitThink(c) {
+  c = c || "";
+  if (!/^\s*<think>/.test(c)) return { plan: null, answer: c };
+  const a = c.indexOf("<think>") + 7, k = c.indexOf("</think>");
+  if (k < 0) return { plan: c.slice(a).trim(), answer: "", open: true };
+  return { plan: c.slice(a, k).trim(), answer: c.slice(k + 8).replace(/^\s+/, "") };
+}
+const answerOf = c => splitThink(c).answer;
+function htmlFrom(text) {
+  const parts = (text || "").split("```"); let best = "";
+  for (let i = 1; i < parts.length; i += 2) {
+    const nl = parts[i].indexOf("\n"); const lang = nl >= 0 ? parts[i].slice(0, nl).trim() : "";
+    const code = nl >= 0 ? parts[i].slice(nl + 1) : parts[i];
+    if ((/^(html|htm|svg)$/i.test(lang) || /<(!doctype|html|body|svg)/i.test(code)) && code.length > best.length) best = code;
+  }
+  return best.length > 150 ? best : "";
+}
+
+// ---------- live indicator ----------
+const live = { on: false, stage: "", t0: 0, chars: 0, toks: 0, tFirst: 0, timer: 0, think: false };
+function liveStart(stage, think) {
+  Object.assign(live, { on: true, stage, t0: performance.now(), chars: 0, toks: 0, tFirst: 0, think: !!think });
+  $("#live").classList.add("on"); liveSet(stage);
+  clearInterval(live.timer); live.timer = setInterval(liveTick, 250); liveTick();
+}
+function liveSet(stage, kind) {
+  live.stage = stage; $("#live .stage").textContent = stage;
+  const dot = $("#live span"); dot.className = kind === "pulse" ? "orb" : "spin";
+}
+function liveTick() {
+  if (!live.on) return;
+  const s = (performance.now() - live.t0) / 1000;
+  let t = ` ${s < 60 ? s.toFixed(0) + " s" : Math.floor(s / 60) + " min " + Math.floor(s % 60) + " s"}`;
+  if (live.toks) {
+    const words = Math.round(live.chars / 5.5);
+    const rate = live.toks / Math.max(0.5, (performance.now() - live.tFirst) / 1000);
+    t += ` · ~${words} words · ${rate.toFixed(1)} tok/s`;
+  } else if (s > 4) t += " · the Xbox is reading the conversation";
+  $("#live-num").textContent = t;
+}
+function liveStop() { live.on = false; clearInterval(live.timer); $("#live").classList.remove("on"); }
+
 // ---------- persistence ----------
 function saveConvs() {
   convs.sort((a, b) => b.updated - a.updated);
@@ -231,7 +458,7 @@ function saveConvs() {
     if (LS.set("xa.convs", convs)) { toast("Storage full: older pictures were removed from saved chats"); return; }
   }
 }
-function stripImages(t) { return (t || "").replace(/!\[([^\]\n]*)\]\(data:[^)]*\)/g, "[image]"); }
+function stripImages(t) { return answerOf(t || "").replace(/!\[([^\]\n]*)\]\(data:[^)]*\)/g, "[image]"); }
 
 // ---------- markdown ----------
 function inline(t) {
@@ -301,7 +528,7 @@ function renderConvList() {
 function confirmDelete(c) { return window.confirm(`Delete "${c.title}"?`); }
 
 const EXAMPLES = [
-  ["Build a landing page", "Write a modern, responsive landing page in a single HTML file for a local plumbing business, with a hero section, services and a contact form."],
+  ["🛠 Build a landing page", "/build Write a modern, responsive landing page in a single HTML file for a local plumbing business, with a hero section, services and a contact form."],
   ["Fix my CSS", "My flexbox items won't centre vertically. Explain the common causes and show the fix."],
   ["🌐 Check something current", "/web what is the latest version of Bootstrap and what changed"],
   ["🖼 Make a picture", "/image a cosy coffee shop interior, warm lighting, photorealistic"]
@@ -311,7 +538,7 @@ function renderMsgs() {
   const box = $("#msgs");
   if (!current || !current.messages.length) {
     box.innerHTML = `<div id="empty"><h1>What are we building?</h1><div>Running on your Xbox · nothing leaves your network except web searches.</div><div class="cards">` +
-      EXAMPLES.map((e, i) => `<div class="card" data-ex="${i}"><b>${esc(e[0])}</b>${esc(e[1].replace(/^\/(web|image) /, ""))}</div>`).join("") + `</div></div>`;
+      EXAMPLES.map((e, i) => `<div class="card" data-ex="${i}"><b>${esc(e[0])}</b>${esc(e[1].replace(/^\/(web|image|build) /, ""))}</div>`).join("") + `</div></div>`;
     box.querySelectorAll(".card").forEach(c => c.onclick = () => { $("#input").value = EXAMPLES[+c.dataset.ex][1]; autoGrow(); $("#input").focus(); });
     return;
   }
@@ -319,12 +546,24 @@ function renderMsgs() {
   scrollDown(true);
 }
 function msgHtml(m, i, streaming) {
+  if (m.auto) {
+    const items = (m.issues || []).map(x => `<li>${esc(x.msg)}</li>`).join("");
+    return `<div class="msg note${m.ok ? " ok" : ""}" data-i="${i}">${esc(m.label || "")}${items ? `<details><summary>details</summary><ol>${items}</ol></details>` : ""}</div>`;
+  }
   const who = m.role === "user" ? "You" : (m.model || "Xbox");
-  const body = m.role === "user" ? `<p>${esc(m.content).replace(/\n/g, "<br>")}</p>` : (m.error ? `<p class="err">${esc(m.error)}</p>` : render(m.content, streaming));
+  const body = m.role === "user" ? `<p>${esc(m.content).replace(/\n/g, "<br>")}</p>` : (m.error ? `<p class="err">${esc(m.error)}</p>` : renderAssistant(m.content, streaming));
   const last = i === current.messages.length - 1;
   const cut = last && m.finish === "length";
-  const meta = m.role === "assistant" && !streaming ? `<div class="meta">${m.stats ? `<span>${esc(m.stats)}</span>` : ""}${cut ? `<span class="err">cut off at the length limit</span><button class="primary" data-act="continue">Continue ▸</button>` : ""}<button data-act="copymsg" data-i="${i}">Copy</button>${last ? `<button data-act="retry">Retry</button>` : ""}</div>` : "";
+  const meta = m.role === "assistan)XUI"
+    R"XUI(t" && !streaming ? `<div class="meta">${m.stats ? `<span>${esc(m.stats)}</span>` : ""}${cut ? `<span class="err">cut off at the length limit</span><button class="primary" data-act="continue">Continue ▸</button>` : ""}<button data-act="copymsg" data-i="${i}">Copy</button>${last ? `<button data-act="retry">Retry</button>` : ""}</div>` : "";
   return `<div class="msg ${m.role}" data-i="${i}"><div class="av">${m.role === "user" ? "You" : "AI"}</div><div class="body"><div class="who">${esc(who)}</div><div class="content${streaming ? " typing" : ""}">${body}</div>${meta}</div></div>`;
+}
+function renderAssistant(c, streaming) {
+  const t = splitThink(c);
+  if (t.plan === null) return render(c, streaming);
+  const words = t.plan ? t.plan.split(/\s+/).length : 0;
+  const sum = t.open && streaming ? `🧠 Planning… ${words} words so far` : `🧠 Plan (${words} words) · tap to read`;
+  return `<details class="think"><summary>${sum}</summary><div>${esc(t.plan).replace(/\n/g, "<br>")}</div></details>` + render(t.answer, streaming && !t.open);
 }
 function scrollDown(force) {
   const c = $("#chat");
@@ -333,10 +572,17 @@ function scrollDown(force) {
 
 // ---------- sending ----------
 function buildPrompt(text) {
+  if (/^\s*\/build\s/i.test(text)) return text;
+  if (mode === "build") return "/build " + text;
   if (mode === "web" && !/^\s*\/(web|search)\s/i.test(text)) return "/web " + text;
   if (mode === "image" && !/^\s*\/(image|img)\s/i.test(text)) return "/image " + text;
   return text;
 }
+const reqHist = new WeakMap();
+const isBuildText = t => /^\s*\/build\s/i.test(t || "");
+const unBuild = t => (t || "").replace(/^\s*\/build\s+/i, "");
+function lastUser(upTo) { for (let i = upTo; i >= 0; i--) { const m = current.messages[i]; if (m.role === "user" && !m.auto) return m; } return null; }
+
 async function send(textOverride) {
   if (busy) return;
   const input = $("#input");
@@ -348,46 +594,60 @@ async function send(textOverride) {
   const text = textOverride ? raw : buildPrompt(raw);
   if (!textOverride) {
     current.messages.push({ role: "user", content: text });
-    if (current.title === "New chat") current.title = text.replace(/^\/(web|search|image|img)\s+/i, "").slice(0, 48);
+    if (current.title === "New chat") current.title = text.replace(/^\/(web|search|image|img|build)\s+/i, "").slice(0, 48);
     input.value = ""; autoGrow();
   }
   if (!convs.includes(current)) convs.unshift(current);
   current.updated = Date.now();
-  const reply = { role: "assistant", content: "", model };
+  const build = isBuildText(text);
+  const reply = { role: "assistant", content: "", model, build };
   current.messages.push(reply);
   renderConvList(); renderMsgs();
-  const history = current.messages.slice(0, -1).filter(m => !m.error).map(m => ({ role: m.role, content: stripImages(m.content) }));
+  const history = current.messages.slice(0, -1).filter(m => !m.error && !(m.auto && !m.content)).map(m => ({ role: m.role, content: m.role === "user" ? unBuild(m.content) : stripImages(m.content) }));
   const isImage = /^\s*\/(image|img)\s/i.test(text);
   const isWeb = /^\s*\/(web|search)\s/i.test(text);
-  await streamInto(reply, history, model, isImage ? "Making the picture on the Xbox…" : isWeb ? "Searching the web…" : "Waiting for the Xbox…", isImage);
+  await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", isImage, { think: build && settings.think });
 }
 
-// Continue a reply that was cut off by the length limit: the hidden
-// instruction is sent after the partial reply and the continuation is appended
-// to the same message (an opening code fence the model repeats is dropped).
+// Continue a reply cut off by the length limit. A reply cut off while still
+// planning is restarted as "write the answer from this plan" with thinking off.
 async function continueReply(auto) {
   if (busy || !current) return;
-  const reply = current.messages[current.messages.length - 1];
+  const idx = current.messages.length - 1;
+  const reply = current.messages[idx];
   if (!reply || reply.role !== "assistant" || !reply.content) return;
   reply.autoCount = auto ? (reply.autoCount || 0) + 1 : 0;
   reply.finish = "";
-  const idx = current.messages.length - 1;
-  const history = current.messages.slice(0, idx + 1).filter(m => !m.error).map(m => ({ role: m.role, content: stripImages(m.content) }));
-  history.push({ role: "user", content: CONTINUE_PROMPT });
-  const fenceOpen = (reply.content.match(/```/g) || []).length % 2 === 1;
-  await streamInto(reply, history, reply.model || $("#model").value, "Continuing…", false, { append: true, fenceOpen });
+  let base = reqHist.get(reply);
+  if (!base) base = current.messages.slice(0, idx).filter(m => !m.error && !(m.auto && !m.content)).map(m => ({ role: m.role, content: m.role === "user" ? unBuild(m.content) : stripImages(m.content) }));
+  const t = splitThink(reply.content);
+  if (t.open) {
+    const h = base.map(x => ({ ...x }));
+    const u = h[h.length - 1];
+    u.content += "\n\nYou already planned this:\n" + t.plan.slice(-6000) + "\n\nNow write the final answer following that plan.";
+    reply.content = reply.content.replace(/\s*$/, "") + "\n</think>\n\n";
+    await streamInto(reply, h, reply.model || $("#model").value, "Plan done, now writing", false, { append: true, keepHist: base });
+    return;
+  }
+  const history = [...base, { role: "assistant", content: t.answer }, { role: "user", content: CONTINUE_PROMPT }];
+  const fenceOpen = (t.answer.match(/```/g) || []).length % 2 === 1;
+  await streamInto(reply, history, reply.model || $("#model").value, "Continuing", false, { append: true, fenceOpen, keepHist: base });
 }
 
 async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
+  reqHist.set(reply, opt.keepHist || history);
   const body = {
     model, stream: true, temperature: settings.temperature, max_tokens: settings.max_tokens,
-    messages: [{ role: "system", content: settings.system || DEFAULT_SYSTEM }, ...history]
+    messages: [{ role: "system", content: reply.build ? BUILD_SYSTEM : (settings.system || DEFAULT_SYSTEM) }, ...history]
   };
+  if (opt.think) body.think = true;
   setBusy(true);
-  setLiveStatus(waitLabel);
+  liveStart(waitLabel, opt.think);
+  setLiveStatus("");
   const t0 = performance.now(); let firstTok = 0; let chunks = 0;
   const base = opt.append ? reply.content : "";
   let added = "";
+  reply.stopped = false;
   aborter = new AbortController();
   try {
     const res = await fetch(API + "/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: aborter.signal });
@@ -408,15 +668,17 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
           if (j.error) throw new Error(j.error.message || "error");
           const ch = j.choices?.[0];
           if (ch?.finish_reason) reply.finish = ch.finish_reason;
-          const pi)XUI"
-    R"XUI(ece = ch?.delta?.content;
+          const piece = ch?.delta?.content;
           if (piece) {
-            if (!firstTok) { firstTok = performance.now(); setLiveStatus(opt.append ? "Continuing…" : "Writing…"); }
+            if (!firstTok) { firstTok = performance.now(); live.tFirst = firstTok; }
             added += piece; chunks++;
+            if (piece !== "<think>\n") { live.toks++; live.chars += piece.length; }
             let shown = added;
-            // Drop a repeated opening fence ("```html\n") when continuing inside code.
             if (opt.fenceOpen) shown = shown.replace(/^\s*```[\w+#.-]*[ \t]*\n?/, m => (m.includes("\n") || shown.length > m.length) ? "" : m);
-            reply.content = base + (opt.append && base && !/\s$/.test(base) && /^\s/.test(shown) ? "" : "") + shown;
+            reply.content = base + shown;
+            const th = splitThink(reply.content);
+            const stage = th.open ? "Thinking it through" : opt.append ? (waitLabel === "Continuing" ? "Continuing" : "Writing") : "Writing";
+            if (stage !== live.stage) liveSet(stage, th.open ? "pulse" : "");
             paintLast(true);
           }
         }
@@ -428,18 +690,53 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
     reply.stats = opt.append ? (reply.stats ? reply.stats + " · continued" : st) : st;
     if (!reply.content) reply.error = "The Xbox returned an empty reply.";
   } catch (e) {
-    if (e.name === "AbortError") { reply.stats = "stopped"; reply.finish = ""; if (!reply.content) reply.error = "Stopped."; }
+    if (e.name === "AbortError") { reply.stats = "stopped"; reply.finish = ""; reply.stopped = true; if (!reply.content) reply.error = "Stopped."; }
     else reply.error = /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? "Couldn't reach the Xbox. Is xllama open on the console?" : "Error: " + e.message;
   } finally {
-    setBusy(false); aborter = null; setLiveStatus("");
+    setBusy(false); aborter = null; liveStop();
     current.updated = Date.now(); saveConvs(); renderConvList(); renderMsgs(); poll();
   }
-  // Auto-continue a cut-off reply (bounded so it can never loop forever).
   if (reply.finish === "length" && !reply.error && settings.autoContinue && (reply.autoCount || 0) < MAX_AUTO_CONTINUE) {
-    setLiveStatus("Reply hit the length limit, continuing automatically…");
+    liveStart("Hit the length limit, continuing automatically"); liveSet("Hit the length limit, continuing automatically", "pulse");
     setTimeout(() => continueReply(true), 700);
+    return;
   }
+  if (reply.build && settings.autoCheck && !reply.error && !reply.stopped && reply.finish !== "length") autoCheck(reply);
 }
+
+// Open the finished page in a hidden browser frame, collect problems and, when
+// there are serious ones, ask the model for a corrected file (bounded rounds).
+async function autoCheck(reply) {
+  const conv = current;
+  const html = htmlFrom(answerOf(reply.content));
+  if (!html) return;
+  liveStart("Checking the page in a hidden browser"); liveSet("Checking the page in a hidden browser", "pulse");
+  const issues = await checkPage(html);
+  liveStop();
+  if (current !== conv || busy || conv.messages[conv.messages.length - 1] !== reply) return;
+  if (issues === null) { reply.stats = (reply.stats || "") + " · check timed out"; renderMsgs(); return; }
+  const major = issues.filter(x => x.sev === "major");
+  const round = reply.fixRound || 0;
+  if (!major.length) {
+    reply.stats = (reply.stats || "") + (issues.length ? ` · checked ✓ (${issues.length} minor note${issues.length > 1 ? "s" : ""})` : " · checked ✓ no problems found");
+    if (issues.length) conv.messages.push({ role: "user", auto: "check", ok: true, label: "🔍 Page checked: no serious problems. Minor notes (not fixed automatically):", issues, content: "" });
+    saveConvs(); renderMsgs(); return;
+  }
+  if (round >= MAX_FIX_ROUNDS) {
+    conv.messages.push({ role: "user", auto: "check", label: `🔍 Still ${major.length} problem${major.length > 1 ? "s" : ""} after ${round} fix rounds, stopping here. Ask for changes yourself, or press Retry.`, issues, content: "" });
+    saveConvs(); renderMsgs(); return;
+  }
+  const list = issues.map((x, i) => `${i + 1}. ${x.msg}`).join("\n");
+  const report = `I opened your page in a browser (1280×800 window) and an automatic check found these problems:\n${list}\n\nFix every problem. Reply with the complete corrected file in one \`\`\`html code block, keeping everything that already works.`;
+  conv.messages.push({ role: "user", auto: "check", label: `🔍 Auto-check found ${major.length} problem${major.length > 1 ? "s" : ""}, asking for a fix (round ${round + 1} of ${MAX_FIX_ROUNDS})`, issues, content: report });
+  const fix = { role: "assistant", content: "", model: reply.model, build: true, fixRound: round + 1 };
+  conv.messages.push(fix);
+  renderMsgs();
+  const orig = unBuild(lastUser(conv.messages.length - 1)?.content || "");
+  const history = [{ role: "user", content: orig }, { role: "assistant", content: "```html\n" + html + "\n```" }, { role: "user", content: report }];
+  await streamInto(fix, history, reply.model || $("#model").value, "Fixing the problems", false, { think: settings.think });
+}
+
 function paintLast(streaming) {
   const box = $("#msgs"); const i = current.messages.length - 1;
   const last = box.querySelector(`.msg[data-i="${i}"]`);
@@ -454,12 +751,18 @@ function setLiveStatus(t) { $("#barinfo").textContent = t; }
 $("#msgs").addEventListener("click", async e => {
   const b = e.target.closest("button"); if (!b) return;
   const act = b.dataset.act;
-  if (act === "copy") { await copy(codeStore[+b.dataset.id].code); toast("Copied"); }
+  if (act ===)XUI"
+    R"XUI( "copy") { await copy(codeStore[+b.dataset.id].code); toast("Copied"); }
   if (act === "save") { const c = codeStore[+b.dataset.id]; download(c.code, "code." + extFor(c.lang)); }
   if (act === "preview") { openPreview(codeStore[+b.dataset.id].code); }
-  if (act === "copymsg") { await copy(current.messages[+b.dataset.i].content); toast("Copied"); }
+  if (act === "copymsg") { await copy(answerOf(current.messages[+b.dataset.i].content)); toast("Copied"); }
   if (act === "continue") { continueReply(false); return; }
-  if (act === "retry") { current.messages.pop(); send(current.messages[current.messages.length - 1]?.content); }
+  if (act === "retry") {
+    current.messages.pop();
+    const prev = current.messages[current.messages.length - 1];
+    if (prev?.auto) { current.messages.pop(); const r = current.messages[current.messages.length - 1]; if (r?.role === "assistant") { r.fixRound = (r.fixRound || 1) - 1; renderMsgs(); autoCheck(r); } return; }
+    send(prev?.content);
+  }
 });
 function extFor(l) { l = (l || "").toLowerCase(); return { html: "html", htm: "html", css: "css", js: "js", javascript: "js", ts: "ts", typescript: "ts", json: "json", python: "py", py: "py", php: "php", sh: "sh", bash: "sh", svg: "svg", md: "md" }[l] || "txt"; }
 async function copy(t) { try { await navigator.clipboard.writeText(t); } catch { const a = document.createElement("textarea"); a.value = t; document.body.appendChild(a); a.select(); document.execCommand("copy"); a.remove(); } }
@@ -467,7 +770,7 @@ function download(text, name) { const a = document.createElement("a"); a.href = 
 let previewHtml = "";
 function openPreview(code) {
   previewHtml = /<html|<!doctype/i.test(code) ? code : `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>${code}</body></html>`;
-  $("#preview").srcdoc = previewHtml; show("#m-preview");
+  $("#preview").srcdoc = injectInto(previewHtml, false, ""); show("#m-preview");
 }
 $("#pv-open").onclick = () => { const w = window.open(); if (w) { w.document.write(previewHtml); w.document.close(); } };
 
@@ -479,7 +782,8 @@ $("#send").onclick = () => busy ? aborter?.abort() : send();
 document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
   mode = c.dataset.mode;
   document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
-  $("#input").placeholder = mode === "web" ? "Ask something to look up on the web…" : mode === "image" ? "Describe the picture…" : "Message the Xbox…";
+  $("#input").placeholder = mode === "web" ? "Ask something to look up on the web…" : mode === "image" ? "Describe the picture…" : mode === "build" ? "Describe the page or drawing to build…" : "Message the Xbox…";
+  $("#modes").classList.toggle("build", mode === "build");
   $("#input").focus();
 });
 $("#newchat").onclick = () => { newConv(); closeSide(); };
@@ -529,6 +833,9 @@ $("#b-settings").onclick = () => {
 $("#s-system").oninput = () => { settings.system = $("#s-system").value; LS.set("xa.settings", settings); };
 $("#s-system-reset").onclick = () => { settings.system = DEFAULT_SYSTEM; $("#s-system").value = DEFAULT_SYSTEM; LS.set("xa.settings", settings); };
 $("#s-temp").oninput = () => { settings.temperature = +$("#s-temp").value; $("#s-temp-v").textContent = settings.temperature; LS.set("xa.settings", settings); };
+$("#o-think").checked = settings.think !== false; $("#o-check").checked = settings.autoCheck !== false;
+$("#o-think").onchange = () => { settings.think = $("#o-think").checked; LS.set("xa.settings", settings); };
+$("#o-check").onchange = () => { settings.autoCheck = $("#o-check").checked; LS.set("xa.settings", settings); };
 $("#s-auto").onchange = () => { settings.autoContinue = $("#s-auto").checked; LS.set("xa.settings", settings); };
 $("#s-max").onchange = () => { settings.max_tokens = Math.max(64, Math.min(8192, +$("#s-max").value || 2048)); LS.set("xa.settings", settings); };
 $("#s-key-go").onclick = async () => {

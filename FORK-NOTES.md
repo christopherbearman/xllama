@@ -73,3 +73,9 @@ do not fill the context. On the console screen, view it with **Image**.
 | `GET /v1/debug/log`     | `{"log": ...}` the last ~400 lines of `xllama.log`     |
 | `GET /v1/debug/status`  | resident model, app memory limit/usage, image progress |
 | `POST /v1/debug/unload` | drops the resident chat model to free memory           |
+
+## Build mode (v1.10.2)
+- Web UI "🛠 Build" mode (or `/build ...`): website/drawing system prompt (SVG for pictures, loops for repeated items, one rotation pivot, flex/grid layout).
+- "🧠 Think first": sends `"think": true`; the server swaps Qwen3's empty think prefill for an open `<think>` so the model plans first. The plan is folded away in the page. Also accepts `chat_template_kwargs.enable_thinking`.
+- "🔍 Auto-check & fix": the finished HTML is opened in a hidden sandboxed 1280×800 frame; JS errors, blank pages, sideways scrolling, content cut off at the page edge and elements hidden behind others are sent back for a fix (max 2 rounds). Unused CSS rules are reported as minor notes.
+- Live progress bar above the input: stage, timer, words and tok/s.

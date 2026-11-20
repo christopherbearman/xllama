@@ -174,3 +174,15 @@ TEST_CASE("Qwen3 no-think history replays the empty think block (KV prefix reuse
     CHECK_FALSE(xllama::chat_format_for("qwen25-coder-1.5b").history_keeps_gen_suffix);
     CHECK_FALSE(xllama::chat_format_for("lfm25-1.2b-thinking").history_keeps_gen_suffix);
 }
+
+#include "xllama/think_mode.h"
+TEST_CASE("thinking prefill replaces the Qwen3 no-think suffix") {
+    const std::string suffix = "<think>\n\n</think>\n\n";
+    std::string p = "<|im_start|>assistant\n" + suffix;
+    CHECK(xllama::apply_thinking_prefill(p, suffix));
+    CHECK(p == "<|im_start|>assistant\n<think>\n");
+    std::string q = "<|im_start|>assistant\n";
+    CHECK_FALSE(xllama::apply_thinking_prefill(q, ""));        // not Qwen3
+    CHECK_FALSE(xllama::apply_thinking_prefill(q, suffix));    // no suffix present
+    CHECK(q == "<|im_start|>assistant\n");
+}

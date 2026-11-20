@@ -24,6 +24,7 @@
     #include "model-downloader.h"
     #include "web-fetch.h"
     #include "web-ui-html.h"
+    #include "xllama/think_mode.h"
     #include "xllama/api_activity.h"
     #include "xllama/api_connection.h"
     #include "xllama/api_policy.h"
@@ -1250,6 +1251,16 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
                                  "\n");
         gp.prompt = fit.prompt;
     }
+    // Fork: {"think": true} (or chat_template_kwargs.enable_thinking) lets a
+    // Qwen3.x model plan before answering; other models ignore it.
+    bool want_think = root.GetNamedBoolean(L"think", false);
+    if (root.HasKey(L"chat_template_kwargs") &&
+        root.GetNamedValue(L"chat_template_kwargs").ValueType() == JsonValueType::Object)
+        want_think = root.GetNamedObject(L"chat_template_kwargs")
+                         .GetNamedBoolean(L"enable_thinking", want_think);
+    const bool thinking = want_think && ::xllama::apply_thinking_prefill(gp.prompt, fmt.gen_suffix);
+    if (thinking)
+        ::xllama::log_output("[xllama] api: thinking on for this reply\n");
     fill_sampling(root, gp);
     // Client-supplied stop: a string or an array of strings, added to the
     // format's own stops so clients can bound output.
@@ -1293,6 +1304,8 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
             return std::string(); // the role chunk could not be written
         }
         gp.abort_flag = &abort;
+        if (thinking)
+            sse->write_delta(::xllama::kThinkOpenPrefill);
         // The decode loop reports a piece before it checks the stop list, so the
         // stream withholds any suffix that could still become a stop.
         ::xllama::StopSequenceFilter stop_filter(gp.stop_sequences);
@@ -1335,7 +1348,8 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
         return error_json("generation failed: " + r.error_msg);
     }
     ticket.tokens(r.n_prompt, r.n_eval);
-    const std::string content = fmt.postprocess_output(r.output_text);
+    const std::string content = thinking ? std::string(::xllama::kThinkOpenPrefill) + r.output_text
+                                         : fmt.postprocess_output(r.output_text);
 
     JsonObject message;
     message.Insert(L"role", JsonValue::CreateStringValue(L"assistant"));
