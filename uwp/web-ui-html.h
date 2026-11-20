@@ -197,6 +197,7 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
       <div class="r" style="margin-top:8px"><label style="margin:0;display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="s-auto"> Auto-continue replies that hit the limit (up to 4 times)</label></div></div>
     <div class="field"><label>Download a model to the Xbox</label>
       <div class="r"><select id="s-pull">
+        <option value="qwen35-9b">Big Queef: Qwen3.5 9B — smartest, slow (3.5 GB)</option>
         <option value="qwen35-4b">Qwen3.5 4B — best coding (2.7 GB)</option>
         <option value="phi4-mini">Phi-4 mini — strong all-rounder (2.5 GB)</option>
         <option value="qwen25-coder-1.5b">Qwen2.5 Coder 1.5B — fast coding (1 GB)</option>
@@ -323,8 +324,8 @@ function xaInject(CHECK, TOKEN) {
       var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
       var all = b.querySelectorAll("*"), items = [];
       for (var i = 0; i < all.length && i < 2500; i++) {
-        var el = all[i]; if (el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) co)XUI"
-    R"XUI(ntinue;
+        var el = all[i]; if ()XUI"
+    R"XUI(el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) continue;
         var r = el.getBoundingClientRect(); var area = r.width * r.height;
         if (area < W * H * 0.015 || !vis(el) || !painted(el)) continue;
         items.push({ el: el, area: area });
@@ -480,11 +481,11 @@ const live = { on: false, stage: "", t0: 0, chars: 0, toks: 0, tFirst: 0, timer:
 function liveStart(stage, think) {
   Object.assign(live, { on: true, stage, t0: performance.now(), chars: 0, toks: 0, tFirst: 0, think: !!think });
   $("#live").classList.add("on"); liveSet(stage);
-  clearInterval(live.timer); live.timer = setInterval(liveTick, 250); liveTick();
+  clearInterval(live.timer); live.timer = setInterval(liveTick, 250); liv)XUI"
+    R"XUI(eTick();
 }
 function liveSet(stage, kind) {
-  live.stage = stage; $("#live .stage").textConten)XUI"
-    R"XUI(t = stage;
+  live.stage = stage; $("#live .stage").textContent = stage;
   const dot = $("#live span"); dot.className = kind === "pulse" ? "orb" : "spin";
 }
 function liveTick() {
@@ -687,8 +688,8 @@ async function continueReply(auto) {
   if (t.open) {
     const h = base.map(x => ({ ...x }));
     const u = h[h.length - 1];
-    u.content += "\n\nYou already planned this:\n" + t.plan.slice(-6000) + "\n\nNow write the final answer following )XUI"
-    R"XUI(that plan.";
+    u.content += "\n\nYo)XUI"
+    R"XUI(u already planned this:\n" + t.plan.slice(-6000) + "\n\nNow write the final answer following that plan.";
     reply.content = reply.content.replace(/\s*$/, "") + "\n</think>\n\n";
     await streamInto(reply, h, reply.model || $("#model").value, "Plan done, now writing", false, { append: true, keepHist: base });
     return;
@@ -863,9 +864,9 @@ $("#input").addEventListener("input", autoGrow);
 $("#input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 $("#send").onclick = () => busy ? aborter?.abort() : send();
 document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
-  mode = c.dataset.mode;
-  document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", )XUI"
-    R"XUI(x === c));
+  mode )XUI"
+    R"XUI(= c.dataset.mode;
+  document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
   $("#input").placeholder = mode === "web" ? "Ask something to look up on the web…" : mode === "image" ? "Describe the picture…" : mode === "build" ? "Describe the page or drawing to build…" : "Message the Xbox…";
   $("#modes").classList.toggle("build", mode === "build");
   $("#modes").classList.toggle("image", mode === "image");
@@ -876,7 +877,7 @@ $("#menu").onclick = () => $("#side").classList.toggle("open");
 function closeSide() { $("#side").classList.remove("open"); }
 
 // ---------- models + status ----------
-const NICKNAMES = { "qwen35-4b": "Queef (Coding)", "lfm25-350m": "Stickybeak (Images)", "lfm25-1.2b-instruct": "Stickybeak 1.2B (Images)", "phi4-mini": "Mo Farah (Fast)", "qwen25-coder-1.5b": "Qwen2.5 Coder 1.5B", "qwen3-1.7b": "Qwen3 1.7B" };
+const NICKNAMES = { "qwen35-9b": "Big Queef (Smart)", "qwen35-4b": "Queef (Coding)", "lfm25-350m": "Stickybeak (Images)", "lfm25-1.2b-instruct": "Stickybeak 1.2B (Images)", "phi4-mini": "Mo Farah (Fast)", "qwen25-coder-1.5b": "Qwen2.5 Coder 1.5B", "qwen3-1.7b": "Qwen3 1.7B" };
 function nick(id) { return NICKNAMES[id] || id; }
 async function loadModels() {
   try {

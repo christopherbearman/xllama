@@ -1416,6 +1416,7 @@ std::string models_json() {
         m.Insert(L"owned_by", JsonValue::CreateStringValue(L"xllama"));
         // Fork: friendly names (Open WebUI shows "name" when present).
         static const std::pair<const char*, const char*> kNick[] = {
+            {"qwen35-9b", "Big Queef (Smart)"},
             {"qwen35-4b", "Queef (Coding)"},
             {"lfm25-350m", "Stickybeak (Images)"},
             {"lfm25-1.2b-instruct", "Stickybeak 1.2B (Images)"},
