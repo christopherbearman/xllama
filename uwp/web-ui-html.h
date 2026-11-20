@@ -247,7 +247,7 @@ function similar(a, b) { const A = shingles(a), B = shingles(b); if (A.size < 15
 const MAX_FIX_ROUNDS = 2;
 // Plans past ~500 tokens (~2,000 characters) rarely add anything for a page and
 // eat the reply's room: stop planning there and write.
-const THINK_BUDGET_CHARS = 2000;
+const THINK_BUDGET_CHARS = 500; // tokens: the first request of a thinking reply is capped here
 const IMAGE_PROMPT_SYSTEM = "You write prompts for a Stable Diffusion image model (DreamShaper). Turn the user's description into ONE prompt of at most 60 words: the main subject first, then setting, composition and camera angle, lighting, colours, mood and art style, as comma-separated phrases. Keep everything the user asked for. Reply with the prompt only: no quotes, no explanation.";
 const BUILD_SYSTEM = `You are an expert front-end developer. Reply with ONE complete, self-contained HTML file in a single \`\`\`html code block (CSS in <style>, JavaScript in <script>), then at most two sentences of explanation.
 Rules:
@@ -324,9 +324,9 @@ function xaInject(CHECK, TOKEN) {
     try {
       var W = innerWidth, H = innerHeight, de = document.documentElement, b = document.body;
       if (!b) { add("major", "The page has no <body>."); return post(); }
-      var bcs = getComputedStyle(b), dcs = getComputedStyle(de);
-      )XUI"
-    R"XUI(var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
+      va)XUI"
+    R"XUI(r bcs = getComputedStyle(b), dcs = getComputedStyle(de);
+      var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
       var all = b.querySelectorAll("*"), items = [];
       for (var i = 0; i < all.length && i < 2500; i++) {
         var el = all[i]; if (el.ownerSVGElement || /^(script|style|link|meta|br|noscript|template)$/i.test(el.tagName)) continue;
@@ -481,8 +481,8 @@ function htmlFrom(text) {
 }
 
 // ---------- live indicator ----------
-const live = { on: false, stage: "", t0: 0, chars: 0, toks: 0, tFirst: 0, timer: 0, think: false })XUI"
-    R"XUI(;
+const live = { on: false, stage: "")XUI"
+    R"XUI(, t0: 0, chars: 0, toks: 0, tFirst: 0, timer: 0, think: false };
 function liveStart(stage, think) {
   Object.assign(live, { on: true, stage, t0: performance.now(), chars: 0, toks: 0, tFirst: 0, think: !!think });
   $("#live").classList.add("on"); liveSet(stage);
@@ -666,7 +666,9 @@ async function send(textOverride) {
   if (isImage && settings.imageThink) {
     const desc = text.replace(/^\s*\/(image|img)\s+/i, "");
     reply.model = model;
-    await streamInto(reply, [{ role: "user", content: desc }], model, "Thinking up the picture", false, { think: true, system: IMAGE_PROMPT_SYSTEM, maxTokens: 1500, noAuto: true, thinkBudget: 1600 });
+    await streamInto(reply, [{ role: "user", content: desc }], model, "Thinking up the picture", false, { think: true, system: IMAGE_PROMPT_SYSTEM, maxTokens: 1500, noAuto: true, thinkBudget: 400 });
+    if (reply.error || reply.stopped) return;
+    if (reply.finish === "length") await continueReply(false); // prompt cut by the budget: finish it
     if (reply.error || reply.stopped) return;
     const t = splitThink(reply.content);
     const prompt = t.answer.replace(/```[\s\S]*?```/g, "").replace(/^\s*(prompt\s*:)?\s*/i, "").split("\n").map(x => x.trim()).filter(Boolean)[0]?.replace(/^["'*]+|["'*]+$/g, "") || desc;
@@ -675,12 +677,12 @@ async function send(textOverride) {
     await streamInto(reply, [{ role: "user", content: "/image " + prompt }], model, "Making the picture", true, { append: true });
     return;
   }
-  await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", isImage, { think: build && settings.think, thinkBudget: THINK_BUDGET_CHARS });
+  await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", i)XUI"
+    R"XUI(sImage, { think: build && settings.think, thinkBudget: THINK_BUDGET_CHARS });
 }
 
 // Continue a reply cut off by the length limit (or a plan cut by the thinking
-// budget). The unfinished reply goes back as a tr)XUI"
-    R"XUI(ailing assistant message: the
+// budget). The unfinished reply goes back as a trailing assistant message: the
 // server ends the prompt with it and the model carries on mid-line. It is
 // exactly the text the model produced, so the Xbox reuses its KV and does not
 // re-read the conversation. A plan still open is closed first, so it writes.
@@ -696,7 +698,8 @@ async function continueReply(auto, closePlan) {
   const t = splitThink(reply.content);
   let label = "Continuing";
   if (t.open || closePlan) {
-    reply.content = reply.content.replace(/\s*$/, "") + "\n</think>\n\n";
+    // Append only: the text must stay exactly what the Xbox generated, so it can keep its KV.
+    reply.content += (reply.content.endsWith("\n") ? "" : "\n") + "</think>\n\n";
     label = "Plan done, now writing";
   }
   const history = [...base, { role: "assistant", content: reply.content }];
@@ -707,7 +710,8 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   reqHist.set(reply, opt.keepHist || history);
   if (opt.system) reqSys.set(reply, opt.system);
   const body = {
-    model, stream: true, temperature: opt.temperature ?? settings.temperature, max_tokens: opt.maxTokens || settings.max_tokens,
+    model, stream: true, temperature: opt.temperature ?? settings.temperature,
+    max_tokens: opt.think && opt.thinkBudget ? Math.min(opt.thinkBudget, opt.maxTokens || settings.max_tokens) : (opt.maxTokens || settings.max_tokens),
     messages: [{ role: "system", content: opt.system || (reply.build ? BUILD_SYSTEM : (settings.system || DEFAULT_SYSTEM)) }, ...history]
   };
   if (opt.think) body.think = true;
@@ -717,7 +721,6 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   const t0 = performance.now(); let firstTok = 0; let chunks = 0;
   const base = opt.append ? reply.content : "";
   let added = "";
-  let planCut = false;
   reply.stopped = false;
   aborter = new AbortController();
   try {
@@ -749,9 +752,6 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
             if (opt.fenceOpen) shown = shown.replace(/^\s*```[\w+#.-]*[ \t]*\n?/, m => (m.includes("\n") || shown.length > m.length) ? "" : m);
             reply.content = base + shown;
             const th = splitThink(reply.content);
-            if (opt.thinkBudget && th.open && th.plan.length > opt.thinkBudget && !planCut) {
-              planCut = true; aborter.abort(); // budget reached: stop planning, then write
-            }
             const stage = th.open ? "Thinking it through" : opt.append ? (waitLabel === "Continuing" ? "Continuing" : "Writing") : "Writing";
             if (stage !== live.stage) liveSet(stage, th.open ? "pulse" : "");
             paintLast(true);
@@ -765,14 +765,16 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
     reply.stats = opt.append ? (reply.stats ? reply.stats + " · continued" : st) : st;
     if (!reply.content) reply.error = "The Xbox returned an empty reply.";
   } catch (e) {
-    if (e.name === "AbortError" && planCut) { reply.finish = ""; }
-    else if (e.name === "AbortError") { reply.stats = "stopped"; reply.finish = ""; reply.stopped = true; if (!reply.content) reply.error = "Stopped."; }
+    if (e.name === "AbortError") { reply.stats = "stopped"; reply.finish = ""; reply.stopped = true; if (!reply.content) reply.error = "Stopped."; }
     else reply.error = /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? "Couldn't reach the Xbox. Is xllama open on the console?" : "Error: " + e.message;
   } finally {
     setBusy(false); aborter = null; liveStop();
     current.updated = Date.now(); saveConvs(); renderConvList(); renderMsgs(); poll();
   }
-  if (planCut && !reply.error) {
+  // Thinking budget: the first request was capped at THINK_BUDGET_TOKENS; a
+  // plan still open there is closed and the reply continues (the Xbox keeps
+  // its KV, as the prompt is exactly its own text plus "</think>").
+  if (opt.thinkBudget && reply.finish === "length" && !reply.error && !reply.stopped && splitThink(reply.content).open) {
     reply.stats = (reply.stats || "") + " · plan capped";
     await continueReply(false, true);
     return;
@@ -862,14 +864,14 @@ $("#msgs").addEventListener("click", async e => {
   const act = b.dataset.act;
   if (act === "copy") { await copy(codeStore[+b.dataset.id].code); toast("Copied"); }
   if (act === "save") { const c = codeStore[+b.dataset.id]; download(c.code, "code." + extFor(c.lang)); }
-  if (act === "preview") { openPreview(codeStore[+b.dataset.id].code); }
+  if (act === "preview") { openPreview(codeStore[+b.datas)XUI"
+    R"XUI(et.id].code); }
   if (act === "copymsg") { await copy(answerOf(current.messages[+b.dataset.i].content)); toast("Copied"); }
   if (act === "continue") { continueReply(false); return; }
   if (act === "retry") {
     current.messages.pop();
     const prev = current.messages[current.messages.length - 1];
-    if (prev?.auto) { current.messages.pop(); const r = current.messages[current.messages.length - 1]; if (r?.role === "assistant") )XUI"
-    R"XUI({ r.fixRound = (r.fixRound || 1) - 1; renderMsgs(); autoCheck(r); } return; }
+    if (prev?.auto) { current.messages.pop(); const r = current.messages[current.messages.length - 1]; if (r?.role === "assistant") { r.fixRound = (r.fixRound || 1) - 1; renderMsgs(); autoCheck(r); } return; }
     send(prev?.content);
   }
 });

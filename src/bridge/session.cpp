@@ -627,6 +627,55 @@ class LlamaSession final : public Session {
         }
         tokens.resize(static_cast<size_t>(n_tokens));
 
+        // Fork: text-extension reuse. When the new prompt is, character for
+        // character, the resident tokens' text plus more (a reply continued
+        // after max_tokens, or a capped plan closed with </think>), keep the
+        // resident tokens as they are and tokenize only the new text.
+        // Re-tokenizing the whole prompt can split the old boundary
+        // differently, and a hybrid cache (Qwen3.5's recurrent layers) cannot
+        // rewind even one token, which turned a continuation into a full
+        // re-read (measured: common 2511 of 2513 resident).
+        if (full_prompt && !m_kv_tokens.empty()) {
+            std::string resident;
+            resident.reserve(m_kv_tokens.size() * 4);
+            size_t first = 0;
+            if (llama_vocab_get_add_bos(vocab) && m_kv_tokens[0] == llama_vocab_bos(vocab))
+                first = 1; // the prompt text never contains the BOS the tokenizer adds
+            char piece[256];
+            bool ok_text = true;
+            for (size_t i = first; i < m_kv_tokens.size() && ok_text; ++i) {
+                const int32_t np =
+                    llama_token_to_piece(vocab, m_kv_tokens[i], piece, sizeof(piece), 0, true);
+                if (np < 0)
+                    ok_text = false;
+                else
+                    resident.append(piece, static_cast<size_t>(np));
+            }
+            if (ok_text && gp.prompt.size() > resident.size() &&
+                gp.prompt.compare(0, resident.size(), resident) == 0) {
+                const std::string tail = gp.prompt.substr(resident.size());
+                int32_t nt = llama_tokenize(vocab, tail.c_str(), static_cast<int32_t>(tail.size()),
+                                            nullptr, 0, false, true);
+                if (nt != INT32_MIN) {
+                    nt = -nt;
+                    std::vector<llama_token> tt(static_cast<size_t>(nt));
+                    nt = llama_tokenize(vocab, tail.c_str(), static_cast<int32_t>(tail.size()),
+                                        tt.data(), nt, false, true);
+                    if (nt > 0) {
+                        tt.resize(static_cast<size_t>(nt));
+                        tokens.assign(m_kv_tokens.begin(), m_kv_tokens.end());
+                        tokens.insert(tokens.end(), tt.begin(), tt.end());
+                        char lb[160];
+                        snprintf(lb, sizeof(lb),
+                                 "[xllama] session: text extension — all %zu resident tokens kept, "
+                                 "%d new\n",
+                                 m_kv_tokens.size(), nt);
+                        log_output(lb);
+                    }
+                }
+            }
+        }
+
         // #170a: on a full prompt, rewind the resident KV to the common token
         // prefix and prefill only the divergent tail. Capped at size-1 so at
         // least one token is prefilled — the last token's logits seed the first
