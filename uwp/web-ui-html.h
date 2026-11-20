@@ -215,9 +215,9 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
 </div></div>
 
 <div class="modal" id="m-preview"><div class="sheet wide">
-  <div class="h"><b>Preview</b><button id="pv-open">Open in new tab</button><button class="ghost" data-close>✕</button></div>
+  <div class="h"><b>Preview</b><button id="pv-reload" title="Reload the preview">↻ Reload</button><button id="pv-open">Open in new tab</button><button class="ghost" data-close>✕</button></div>
   <div id="pv-err" style="display:none;padding:6px 16px;font-size:13px;background:#3a1f20;color:#ffb4b6"></div>
-  <iframe id="preview" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe>
+  <iframe id="preview" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"></iframe>
 </div></div>
 
 <div id="toast"></div>
@@ -260,11 +260,11 @@ function uid() { return Date.now().toString(36) + Math.random().toString(36).sli
 function xaInject(CHECK, TOKEN) {
   var issues = [], seen = {};
   function add(sev, msg) { if (seen[msg]) return; seen[msg] = 1; if (issues.length < 14) issues.push({ sev: sev, msg: msg }); }
-  try { window.localStorage.getItem("x"); } catch (x) {
+  {
     var mk = function () { var d = {}; return { getItem: function (k) { return k in d ? d[k] : null; }, setItem: function (k, v) { d[k] = String(v); }, removeItem: function (k) { delete d[k]; }, clear: function () { d = {}; }, key: function (i) { return Object.keys(d)[i] || null; }, get length() { return Object.keys(d).length; } }; };
     try { Object.defineProperty(window, "localStorage", { value: mk(), configurable: true }); Object.defineProperty(window, "sessionStorage", { value: mk(), configurable: true }); } catch (y) { }
   }
-  try { document.cookie; } catch (x) { var jar = ""; try { Object.defineProperty(document, "cookie", { get: function () { return jar; }, set: function (v) { jar = String(v).split(";")[0]; }, configurable: true }); } catch (y) { } }
+  { var jar = ""; try { Object.defineProperty(document, "cookie", { get: function () { return jar; }, set: function (v) { jar = String(v).split(";")[0]; }, configurable: true }); } catch (y) { } }
   if (!CHECK) {
     if (TOKEN) { window.addEventListener("error", function (e) { if (e.target && e.target !== window) return; try { parent.postMessage({ xaPv: TOKEN, msg: e.message + (e.lineno ? " (line " + e.lineno + ")" : "") }, "*"); } catch (z) { } }, true); }
     return;
@@ -779,6 +779,7 @@ function openPreview(code) {
   pvToken = uid(); $("#pv-err").style.display = "none";
   $("#preview").srcdoc = injectInto(previewHtml, false, pvToken); show("#m-preview");
 }
+$("#pv-reload").onclick = () => openPreview(previewHtml);
 $("#pv-open").onclick = () => { const w = window.open(); if (w) { w.document.write(previewHtml); w.document.close(); } };
 
 // ---------- composer ----------
