@@ -129,3 +129,15 @@ TEST_CASE("Bing RSS parsing") {
     CHECK(p.find("Question: q") != std::string::npos);
     CHECK(xllama::build_web_prompt("q", {}).find("no results") != std::string::npos);
 }
+
+TEST_CASE("web search key parsing and Tavily request body") {
+    CHECK(xllama::parse_web_search_key("tvly-abc123\n").provider == "tavily");
+    CHECK(xllama::parse_web_search_key("tvly-abc123\n").key == "tvly-abc123");
+    CHECK(xllama::parse_web_search_key("brave: BSAkey ").provider == "brave");
+    CHECK(xllama::parse_web_search_key("brave: BSAkey ").key == "BSAkey");
+    CHECK(xllama::parse_web_search_key("").provider == "bing");
+    CHECK(xllama::parse_web_search_key("tavily:").provider == "bing");
+    CHECK(xllama::tavily_request_json("say \"hi\"\n", 5) ==
+          "{\"query\":\"say \\\"hi\\\"\\n\",\"max_results\":5,\"search_depth\":\"basic\","
+          "\"include_answer\":false}");
+}

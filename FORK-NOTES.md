@@ -25,9 +25,11 @@ Not console-benchmarked by upstream.
 - **Qwen3.5 4B** (`qwen35-4b`, Q4_K_M, Apache-2.0) added as the best-quality
   coding model, `n_ctx` 8192.
 - **Web search:** start a message with `/web ` (or `/search `), on the console
-  or through the LAN API. The console fetches Bing RSS results and the model
-  answers from the top 5 with numbered citations. Bing's RSS terms allow
-  personal, non-commercial use.
+  or through the LAN API. The console searches and the model answers from the
+  top 5 results with numbered citations. Providers: **Tavily** (recommended,
+  free tier) or **Brave Search**, set with
+  `POST /v1/config/web-search {"key": "tvly-..."}` (or `"brave:<key>"`). With
+  no key it falls back to Bing RSS, whose results are poor for questions.
 
 ## Remote diagnostics (LAN API, trusted network only)
 

@@ -142,7 +142,10 @@ std::string json_string_value(const std::string& text) {
     std::string safe;
     safe.reserve(text.size());
     for (unsigned char c : text) // keep it valid UTF-8 for to_hstring: ASCII only
-        safe.push_back((c < 0x80 && (c >= 0x20 || c == '\n' || c == '\t')) ? (char)c : '?');
+        if (c == '\r')
+            continue; // CRLF log lines
+        else
+            safe.push_back((c < 0x80 && (c >= 0x20 || c == '\n' || c == '\t')) ? (char)c : '?');
     return winrt::to_string(JsonValue::CreateStringValue(winrt::to_hstring(safe)).Stringify());
 }
 
@@ -196,7 +199,9 @@ std::string debug_status_json() {
            ",\"working_set_mb\":" + std::to_string(::xllama::working_set_mb()) +
            ",\"peak_working_set_mb\":" + std::to_string(::xllama::peak_working_set_mb()) +
            ",\"image_progress\":" + json_string_value(read_local_text("diffuse-progress.txt")) +
-           ",\"image_model\":" + json_string_value(read_local_text("diffuse-model.txt")) + "}";
+           ",\"image_model\":" + json_string_value(read_local_text("diffuse-model.txt")) +
+           ",\"web_search_provider\":" + json_string_value(::xllama::uwp::web_search_provider()) +
+           "}";
 }
 
 // Fork addition: "/web <question>" as the last user message runs a web search
@@ -2144,6 +2149,27 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
         }
         if (req.method == "GET" && req.path == "/v1/debug/status") {
             write_response(socket, "200 OK", debug_status_json());
+            return;
+        }
+        // Fork addition: store the web-search API key (Tavily "tvly-..." or
+        // "brave:<key>"); body {"key": "..."}. An empty key reverts to Bing RSS.
+        if (req.method == "POST" && req.path == "/v1/config/web-search") {
+            JsonObject root{nullptr};
+            if (!JsonObject::TryParse(winrt::to_hstring(req.body), root) || root == nullptr ||
+                !root.HasKey(L"key") ||
+                root.GetNamedValue(L"key").ValueType() != JsonValueType::String) {
+                write_response(socket, "400 Bad Request",
+                               error_json("expected {\"key\": \"...\"}"));
+                return;
+            }
+            if (!::xllama::uwp::save_web_search_key(
+                    winrt::to_string(root.GetNamedString(L"key")))) {
+                write_response(socket, "500 Internal Server Error", error_json("cannot write key"));
+                return;
+            }
+            const std::string provider = ::xllama::uwp::web_search_provider();
+            ::xllama::log_output("[xllama] api: web search provider set to " + provider + "\n");
+            write_response(socket, "200 OK", "{\"provider\":" + json_string_value(provider) + "}");
             return;
         }
         if (req.method == "POST" && req.path == "/v1/debug/unload") {

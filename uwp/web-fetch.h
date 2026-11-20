@@ -13,4 +13,10 @@ namespace xllama::uwp {
 // followed by the question, or a short failure note plus the question.
 std::string web_search_prompt(const std::string& query);
 
+// "tavily", "brave" or "bing" (keyless fallback) from LocalState\web-search-key.txt.
+std::string web_search_provider();
+
+// Store a key ("tvly-...", "tavily:<key>" or "brave:<key>"; empty clears it).
+bool save_web_search_key(const std::string& text);
+
 } // namespace xllama::uwp

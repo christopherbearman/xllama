@@ -184,6 +184,79 @@ inline std::vector<WebResult> parse_bing_rss(const std::string& xml, size_t max_
     return out;
 }
 
+// Search provider from the stored key text: "tavily:<key>" or a bare
+// "tvly-..." key -> Tavily; "brave:<key>" -> Brave; anything else -> keyless
+// Bing RSS fallback.
+struct WebSearchConfig {
+    std::string provider = "bing";
+    std::string key;
+};
+
+inline WebSearchConfig parse_web_search_key(std::string text) {
+    auto trim = [](std::string s) {
+        while (!s.empty() && std::isspace((unsigned char)s.back()))
+            s.pop_back();
+        size_t i = 0;
+        while (i < s.size() && std::isspace((unsigned char)s[i]))
+            ++i;
+        return s.substr(i);
+    };
+    text = trim(text);
+    WebSearchConfig c;
+    if (text.rfind("tavily:", 0) == 0) {
+        c.provider = "tavily";
+        c.key = trim(text.substr(7));
+    } else if (text.rfind("brave:", 0) == 0) {
+        c.provider = "brave";
+        c.key = trim(text.substr(6));
+    } else if (text.rfind("tvly-", 0) == 0) {
+        c.provider = "tavily";
+        c.key = text;
+    }
+    if (c.key.empty())
+        c.provider = "bing";
+    return c;
+}
+
+// Minimal JSON string escape for request bodies.
+inline std::string json_escape(const std::string& s) {
+    std::string out;
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"':
+            out += "\\\"";
+            break;
+        case '\\':
+            out += "\\\\";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            if (c < 0x20) {
+                char b[8];
+                std::snprintf(b, sizeof(b), "\\u%04x", c);
+                out += b;
+            } else {
+                out.push_back((char)c);
+            }
+        }
+    }
+    return out;
+}
+
+inline std::string tavily_request_json(const std::string& query, int max_results) {
+    return "{\"query\":\"" + json_escape(query) +
+           "\",\"max_results\":" + std::to_string(max_results) +
+           ",\"search_depth\":\"basic\",\"include_answer\":false}";
+}
+
 // The user turn the model sees: numbered sources, then the question. Each
 // snippet is capped so five results stay well inside a 2048-token context.
 inline std::string build_web_prompt(const std::string& query, const std::vector<WebResult>& rs,
