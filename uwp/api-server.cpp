@@ -14,6 +14,7 @@
 // guard). Sockets + Json are the WinRT namespaces pch.h does not already pull in.
 #include "pch.h"
 #include <atomic>
+#include <utility>
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Networking.Sockets.h>
@@ -1413,6 +1414,15 @@ std::string models_json() {
         m.Insert(L"object", JsonValue::CreateStringValue(L"model"));
         m.Insert(L"created", JsonValue::CreateNumberValue(static_cast<double>(time(nullptr))));
         m.Insert(L"owned_by", JsonValue::CreateStringValue(L"xllama"));
+        // Fork: friendly names (Open WebUI shows "name" when present).
+        static const std::pair<const char*, const char*> kNick[] = {
+            {"qwen35-4b", "Queef (Coding)"},
+            {"lfm25-350m", "Stickybeak (Images)"},
+            {"lfm25-1.2b-instruct", "Stickybeak 1.2B (Images)"},
+            {"phi4-mini", "Mo Farah (Fast)"}};
+        for (const auto& [k, v] : kNick)
+            if (id == k)
+                m.Insert(L"name", JsonValue::CreateStringValue(winrt::to_hstring(v)));
         if (id == current)
             m.Insert(L"active", JsonValue::CreateBooleanValue(true));
         data.Append(m);

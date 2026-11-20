@@ -216,7 +216,8 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
 
 <div class="modal" id="m-preview"><div class="sheet wide">
   <div class="h"><b>Preview</b><button id="pv-open">Open in new tab</button><button class="ghost" data-close>✕</button></div>
-  <iframe id="preview" sandbox="allow-scripts allow-forms allow-modals"></iframe>
+  <div id="pv-err" style="display:none;padding:6px 16px;font-size:13px;background:#3a1f20;color:#ffb4b6"></div>
+  <iframe id="preview" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe>
 </div></div>
 
 <div id="toast"></div>
@@ -263,7 +264,11 @@ function xaInject(CHECK, TOKEN) {
     var mk = function () { var d = {}; return { getItem: function (k) { return k in d ? d[k] : null; }, setItem: function (k, v) { d[k] = String(v); }, removeItem: function (k) { delete d[k]; }, clear: function () { d = {}; }, key: function (i) { return Object.keys(d)[i] || null; }, get length() { return Object.keys(d).length; } }; };
     try { Object.defineProperty(window, "localStorage", { value: mk(), configurable: true }); Object.defineProperty(window, "sessionStorage", { value: mk(), configurable: true }); } catch (y) { }
   }
-  if (!CHECK) return;
+  try { document.cookie; } catch (x) { var jar = ""; try { Object.defineProperty(document, "cookie", { get: function () { return jar; }, set: function (v) { jar = String(v).split(";")[0]; }, configurable: true }); } catch (y) { } }
+  if (!CHECK) {
+    if (TOKEN) { window.addEventListener("error", function (e) { if (e.target && e.target !== window) return; try { parent.postMessage({ xaPv: TOKEN, msg: e.message + (e.lineno ? " (line " + e.lineno + ")" : "") }, "*"); } catch (z) { } }, true); }
+    return;
+  }
   window.addEventListener("error", function (e) { if (e.target && e.target !== window) return; add("major", "JavaScript error: " + e.message + (e.lineno ? " (line " + e.lineno + ")" : "")); }, true);
   window.addEventListener("unhandledrejection", function (e) { add("major", "Unhandled promise error: " + ((e.reason && e.reason.message) || e.reason)); });
   var ce = console.error; console.error = function () { try { add("minor", "console.error: " + [].map.call(arguments, String).join(" ").slice(0, 200)); } catch (x) { } return ce.apply(console, arguments); };
@@ -337,7 +342,8 @@ function xaInject(CHECK, TOKEN) {
           var el = it.el; if (checked.has(el)) return;
           var r = el.getBoundingClientRect();
           var x0 = Math.max(r.left, 0), x1 = Math.min(r.right, W), y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, H);
-          if (x1 - x0 < 8 || y1 - y0 < 8 || (x1 - x0) * (y1 - y0) < 0.4 * Math.min(it.area, W * H * 0.5)) return;
+          if (x1 - x0 < 8 || y1 - y0 < 8 || (x1 - x0) * (y1 - y0) < 0.4 * Math.min(it.area, )XUI"
+    R"XUI(W * H * 0.5)) return;
           checked.add(el);
           var tot = 0, own = 0, by = new Map();
           for (var gx = 0; gx < 5; gx++) for (var gy = 0; gy < 5; gy++) {
@@ -345,8 +351,7 @@ function xaInject(CHECK, TOKEN) {
             var hit = document.elementFromPoint(px, py); if (!hit) continue; tot++;
             if (hit === el || el.contains(hit) || hit.contains(el)) { own++; continue; }
             var root = hit; while (root.parentElement && !root.parentElement.contains(el)) root = root.parentElement;
-            by.set(root, (by.get(root) || 0) +)XUI"
-    R"XUI( 1);
+            by.set(root, (by.get(root) || 0) + 1);
           }
           if (tot < 10 || (tot - own) / tot <= 0.5) return;
           var best = null, bn = 0; by.forEach(function (n, k) { if (n > bn) { bn = n; best = k; } });
@@ -547,15 +552,15 @@ function renderMsgs() {
 }
 function msgHtml(m, i, streaming) {
   if (m.auto) {
-    const items = (m.issues || []).map(x => `<li>${esc(x.msg)}</li>`).join("");
+    const items )XUI"
+    R"XUI(= (m.issues || []).map(x => `<li>${esc(x.msg)}</li>`).join("");
     return `<div class="msg note${m.ok ? " ok" : ""}" data-i="${i}">${esc(m.label || "")}${items ? `<details><summary>details</summary><ol>${items}</ol></details>` : ""}</div>`;
   }
-  const who = m.role === "user" ? "You" : (m.model || "Xbox");
+  const who = m.role === "user" ? "You" : (m.model ? nick(m.model) : "Xbox");
   const body = m.role === "user" ? `<p>${esc(m.content).replace(/\n/g, "<br>")}</p>` : (m.error ? `<p class="err">${esc(m.error)}</p>` : renderAssistant(m.content, streaming));
   const last = i === current.messages.length - 1;
   const cut = last && m.finish === "length";
-  const meta = m.role === "assistan)XUI"
-    R"XUI(t" && !streaming ? `<div class="meta">${m.stats ? `<span>${esc(m.stats)}</span>` : ""}${cut ? `<span class="err">cut off at the length limit</span><button class="primary" data-act="continue">Continue ▸</button>` : ""}<button data-act="copymsg" data-i="${i}">Copy</button>${last ? `<button data-act="retry">Retry</button>` : ""}</div>` : "";
+  const meta = m.role === "assistant" && !streaming ? `<div class="meta">${m.stats ? `<span>${esc(m.stats)}</span>` : ""}${cut ? `<span class="err">cut off at the length limit</span><button class="primary" data-act="continue">Continue ▸</button>` : ""}<button data-act="copymsg" data-i="${i}">Copy</button>${last ? `<button data-act="retry">Retry</button>` : ""}</div>` : "";
   return `<div class="msg ${m.role}" data-i="${i}"><div class="av">${m.role === "user" ? "You" : "AI"}</div><div class="body"><div class="who">${esc(who)}</div><div class="content${streaming ? " typing" : ""}">${body}</div>${meta}</div></div>`;
 }
 function renderAssistant(c, streaming) {
@@ -739,7 +744,8 @@ async function autoCheck(reply) {
 
 function paintLast(streaming) {
   const box = $("#msgs"); const i = current.messages.length - 1;
-  const last = box.querySelector(`.msg[data-i="${i}"]`);
+  const last)XUI"
+    R"XUI( = box.querySelector(`.msg[data-i="${i}"]`);
   const tmp = document.createElement("div"); tmp.innerHTML = msgHtml(current.messages[i], i, streaming);
   if (last) last.replaceWith(tmp.firstChild); else box.appendChild(tmp.firstChild);
   scrollDown();
@@ -751,8 +757,7 @@ function setLiveStatus(t) { $("#barinfo").textContent = t; }
 $("#msgs").addEventListener("click", async e => {
   const b = e.target.closest("button"); if (!b) return;
   const act = b.dataset.act;
-  if (act ===)XUI"
-    R"XUI( "copy") { await copy(codeStore[+b.dataset.id].code); toast("Copied"); }
+  if (act === "copy") { await copy(codeStore[+b.dataset.id].code); toast("Copied"); }
   if (act === "save") { const c = codeStore[+b.dataset.id]; download(c.code, "code." + extFor(c.lang)); }
   if (act === "preview") { openPreview(codeStore[+b.dataset.id].code); }
   if (act === "copymsg") { await copy(answerOf(current.messages[+b.dataset.i].content)); toast("Copied"); }
@@ -767,10 +772,12 @@ $("#msgs").addEventListener("click", async e => {
 function extFor(l) { l = (l || "").toLowerCase(); return { html: "html", htm: "html", css: "css", js: "js", javascript: "js", ts: "ts", typescript: "ts", json: "json", python: "py", py: "py", php: "php", sh: "sh", bash: "sh", svg: "svg", md: "md" }[l] || "txt"; }
 async function copy(t) { try { await navigator.clipboard.writeText(t); } catch { const a = document.createElement("textarea"); a.value = t; document.body.appendChild(a); a.select(); document.execCommand("copy"); a.remove(); } }
 function download(text, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
-let previewHtml = "";
+let previewHtml = "", pvToken = "";
+window.addEventListener("message", e => { if (e.data && e.data.xaPv && e.data.xaPv === pvToken) { const el = $("#pv-err"); el.textContent = "⚠ This page has a JavaScript error: " + e.data.msg; el.style.display = "block"; } });
 function openPreview(code) {
   previewHtml = /<html|<!doctype/i.test(code) ? code : `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>${code}</body></html>`;
-  $("#preview").srcdoc = injectInto(previewHtml, false, ""); show("#m-preview");
+  pvToken = uid(); $("#pv-err").style.display = "none";
+  $("#preview").srcdoc = injectInto(previewHtml, false, pvToken); show("#m-preview");
 }
 $("#pv-open").onclick = () => { const w = window.open(); if (w) { w.document.write(previewHtml); w.document.close(); } };
 
@@ -791,13 +798,14 @@ $("#menu").onclick = () => $("#side").classList.toggle("open");
 function closeSide() { $("#side").classList.remove("open"); }
 
 // ---------- models + status ----------
+const NICKNAMES = { "qwen35-4b": "Queef (Coding)", "lfm25-350m": "Stickybeak (Images)", "lfm25-1.2b-instruct": "Stickybeak 1.2B (Images)", "phi4-mini": "Mo Farah (Fast)", "qwen25-coder-1.5b": "Qwen2.5 Coder 1.5B", "qwen3-1.7b": "Qwen3 1.7B" };
+function nick(id) { return NICKNAMES[id] || id; }
 async function loadModels() {
   try {
     const r = await fetch(API + "/v1/models"); const j = await r.json();
     const ids = (j.data || []).map(m => m.id);
     const sel = $("#model"); const prev = sel.value || settings.model;
-    const nice = { "qwen35-4b": "Qwen3.5 4B · best coding", "phi4-mini": "Phi-4 mini", "qwen25-coder-1.5b": "Qwen2.5 Coder 1.5B", "lfm25-350m": "LFM2.5 350M · fast", "lfm25-1.2b-instruct": "LFM2.5 1.2B", "qwen3-1.7b": "Qwen3 1.7B" };
-    sel.innerHTML = ids.map(id => `<option value="${esc(id)}">${esc(nice[id] || id)}</option>`).join("");
+    sel.innerHTML = ids.map(id => `<option value="${esc(id)}">${esc(nick(id))}</option>`).join("");
     const pick = [prev, "qwen35-4b", "phi4-mini", ids[0]].find(x => x && ids.includes(x));
     if (pick) sel.value = pick;
   } catch { }
@@ -809,7 +817,7 @@ async function poll() {
     $("#banner").style.display = "none"; $("#dot").style.background = "var(--accent)";
     $("#st-state").textContent = s.app_memory_limit_mb < 2048 ? "online · NOT Game mode" : "online";
     $("#st-state").style.color = s.app_memory_limit_mb < 2048 ? "var(--warn)" : "";
-    $("#st-model").textContent = s.resident_model || "none";
+    $("#st-model").textContent = s.resident_model ? nick(s.resident_model) : "none";
     $("#st-mem").textContent = `${(s.app_memory_usage_mb / 1024).toFixed(1)} / ${(s.app_memory_limit_mb / 1024).toFixed(1)} GB`;
     $("#st-web").textContent = s.web_search_provider || "–";
     $("#st-ver").textContent = s.version || "–";
