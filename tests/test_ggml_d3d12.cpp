@@ -83,6 +83,9 @@ TEST_CASE("ggml_d3d12: weight types") {
     CHECK(d3d12_weight_type_supported(GGML_TYPE_Q4_0));
     CHECK(d3d12_weight_type_supported(GGML_TYPE_Q4_K));
     CHECK(d3d12_weight_type_supported(GGML_TYPE_Q6_K));
+    CHECK(d3d12_weight_type_supported(GGML_TYPE_IQ3_XXS));
+    CHECK(d3d12_weight_type_supported(GGML_TYPE_IQ4_XS));
+    CHECK_FALSE(d3d12_weight_type_supported(GGML_TYPE_IQ2_XXS));
     CHECK_FALSE(d3d12_weight_type_supported(GGML_TYPE_Q5_K));
     CHECK_FALSE(d3d12_weight_type_supported(GGML_TYPE_Q8_0));
     CHECK_FALSE(d3d12_weight_type_supported(GGML_TYPE_F16));
@@ -183,6 +186,13 @@ TEST_CASE("ggml_d3d12: kernel emulation matches the CPU backend (q8 activations)
         // Coder-3B ffn_down width: 43 super-blocks, 9030-byte rows.
         {GGML_TYPE_Q6_K, 3, 11008},
         {GGML_TYPE_Q4_0, 5, 2304},
+        // Fork: Qwen3.5-9B IQ quants. 98-byte IQ3_XXS blocks put odd blocks on
+        // 2-byte boundaries; 4096 / 12288 are the 9B hidden / ffn widths.
+        {GGML_TYPE_IQ3_XXS, 13, 1024},
+        {GGML_TYPE_IQ3_XXS, 5, 2304},
+        {GGML_TYPE_IQ3_XXS, 3, 4096},
+        {GGML_TYPE_IQ4_XS, 13, 1024},
+        {GGML_TYPE_IQ4_XS, 3, 12288},
     };
     for (const auto& c : cases) {
         CAPTURE(ggml_type_name(c.t));

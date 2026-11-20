@@ -333,11 +333,11 @@
       ]
     },
     {
-      "_comment": "Fork addition 2026-11-20: Qwen3.5-9B IQ3_S 3.15bpw (byteshape, Apache-2.0; mostly IQ3_XXS + IQ4_XS). The largest model that fits the 5 GB Game budget with headroom (4B Q4_K_M 2.74 GB file -> ~3.5 GB in use, so ~4.3 GB expected). The xllama D3D12 backend only accelerates Q4_0/Q4_K/Q6_K, so this runs on the CPU (gpu_layers 0): slower, smarter. Same qwen35 arch as qwen35-4b (ChatML, no-think prefill, small hybrid KV).",
+      "_comment": "Fork addition 2026-11-20: Qwen3.5-9B IQ3_S 3.15bpw (byteshape, Apache-2.0; mostly IQ3_XXS + IQ4_XS). The largest model that fits the 5 GB Game budget with headroom (4B Q4_K_M 2.74 GB file -> ~3.5 GB in use, so ~4.3 GB expected). Measured CPU-only 2026-11-20: ~3.1 tok/s, 4.7 GB in use. Fork 1.10.9: IQ3_XXS/IQ4_XS D3D12 matmul kernels (shaders/ggml_d3d12_mmv_iq*.hlsl) put ~98% of the weights on the GPU (gpu_layers 99); gguf_gpu_layers.txt = 0 forces the CPU path back. Same qwen35 arch as qwen35-4b (ChatML, no-think prefill, small hybrid KV).",
       "name": "qwen35-9b",
-      "display": "Qwen3.5 9B (GGUF · CPU · smartest, slow)",
+      "display": "Qwen3.5 9B (GGUF · GPU · smartest)",
       "kind": "gguf",
-      "gpu_layers": 0,
+      "gpu_layers": 99,
       "role": "coding",
       "n_ctx": 8192,
       "hf_base_url": "https://huggingface.co/byteshape/Qwen3.5-9B-GGUF/resolve/main",

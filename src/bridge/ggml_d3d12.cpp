@@ -25,7 +25,8 @@ namespace xllama {
 // --- Pure rules (host-tested) ---
 
 bool d3d12_weight_type_supported(ggml_type t) {
-    return t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q6_K;
+    return t == GGML_TYPE_Q4_0 || t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q6_K ||
+           t == GGML_TYPE_IQ3_XXS || t == GGML_TYPE_IQ4_XS; // fork: Qwen3.5-9B IQ quants
 }
 
 D3d12Dispatch d3d12_mm_dispatch(std::int64_t n, std::int64_t ncols) {
@@ -109,6 +110,57 @@ std::int32_t sbyte(std::uint32_t word, std::uint32_t i) {
     return static_cast<std::int8_t>((word >> (8u * i)) & 0xffu);
 }
 
+// iq3xxs_grid from ggml-common.h (also in shaders/ggml_d3d12_mmv_iq3_xxs.hlsl).
+const std::uint32_t kIq3xxsGrid[256] = {
+    0x04040404u, 0x04040414u, 0x04040424u, 0x04040c0cu, 0x04040c1cu, 0x04040c3eu,
+    0x04041404u, 0x04041414u, 0x04041c0cu, 0x04042414u, 0x04043e1cu, 0x04043e2cu,
+    0x040c040cu, 0x040c041cu, 0x040c0c04u, 0x040c0c14u, 0x040c140cu, 0x040c142cu,
+    0x040c1c04u, 0x040c1c14u, 0x040c240cu, 0x040c2c24u, 0x040c3e04u, 0x04140404u,
+    0x04140414u, 0x04140424u, 0x04140c0cu, 0x04141404u, 0x04141414u, 0x04141c0cu,
+    0x04141c1cu, 0x04141c3eu, 0x04142c0cu, 0x04142c3eu, 0x04143e2cu, 0x041c040cu,
+    0x041c043eu, 0x041c0c04u, 0x041c0c14u, 0x041c142cu, 0x041c3e04u, 0x04240c1cu,
+    0x04241c3eu, 0x04242424u, 0x04242c3eu, 0x04243e1cu, 0x04243e2cu, 0x042c040cu,
+    0x042c043eu, 0x042c1c14u, 0x042c2c14u, 0x04341c2cu, 0x04343424u, 0x043e0c04u,
+    0x043e0c24u, 0x043e0c34u, 0x043e241cu, 0x043e340cu, 0x0c04040cu, 0x0c04041cu,
+    0x0c040c04u, 0x0c040c14u, 0x0c04140cu, 0x0c04141cu, 0x0c041c04u, 0x0c041c14u,
+    0x0c041c24u, 0x0c04243eu, 0x0c042c04u, 0x0c0c0404u, 0x0c0c0414u, 0x0c0c0c0cu,
+    0x0c0c1404u, 0x0c0c1414u, 0x0c14040cu, 0x0c14041cu, 0x0c140c04u, 0x0c140c14u,
+    0x0c14140cu, 0x0c141c04u, 0x0c143e14u, 0x0c1c0404u, 0x0c1c0414u, 0x0c1c1404u,
+    0x0c1c1c0cu, 0x0c1c2434u, 0x0c1c3434u, 0x0c24040cu, 0x0c24042cu, 0x0c242c04u,
+    0x0c2c1404u, 0x0c2c1424u, 0x0c2c2434u, 0x0c2c3e0cu, 0x0c34042cu, 0x0c3e1414u,
+    0x0c3e2404u, 0x14040404u, 0x14040414u, 0x14040c0cu, 0x14040c1cu, 0x14041404u,
+    0x14041414u, 0x14041434u, 0x14041c0cu, 0x14042414u, 0x140c040cu, 0x140c041cu,
+    0x140c042cu, 0x140c0c04u, 0x140c0c14u, 0x140c140cu, 0x140c1c04u, 0x140c341cu,
+    0x140c343eu, 0x140c3e04u, 0x14140404u, 0x14140414u, 0x14140c0cu, 0x14140c3eu,
+    0x14141404u, 0x14141414u, 0x14141c3eu, 0x14142404u, 0x14142c2cu, 0x141c040cu,
+    0x141c0c04u, 0x141c0c24u, 0x141c3e04u, 0x141c3e24u, 0x14241c2cu, 0x14242c1cu,
+    0x142c041cu, 0x142c143eu, 0x142c240cu, 0x142c3e24u, 0x143e040cu, 0x143e041cu,
+    0x143e0c34u, 0x143e242cu, 0x1c04040cu, 0x1c040c04u, 0x1c040c14u, 0x1c04140cu,
+    0x1c04141cu, 0x1c042c04u, 0x1c04342cu, 0x1c043e14u, 0x1c0c0404u, 0x1c0c0414u,
+    0x1c0c1404u, 0x1c0c1c0cu, 0x1c0c2424u, 0x1c0c2434u, 0x1c14040cu, 0x1c14041cu,
+    0x1c140c04u, 0x1c14142cu, 0x1c142c14u, 0x1c143e14u, 0x1c1c0c0cu, 0x1c1c1c1cu,
+    0x1c241c04u, 0x1c24243eu, 0x1c243e14u, 0x1c2c0404u, 0x1c2c0434u, 0x1c2c1414u,
+    0x1c2c2c2cu, 0x1c340c24u, 0x1c341c34u, 0x1c34341cu, 0x1c3e1c1cu, 0x1c3e3404u,
+    0x24040424u, 0x24040c3eu, 0x24041c2cu, 0x24041c3eu, 0x24042c1cu, 0x24042c3eu,
+    0x240c3e24u, 0x24141404u, 0x24141c3eu, 0x24142404u, 0x24143404u, 0x24143434u,
+    0x241c043eu, 0x241c242cu, 0x24240424u, 0x24242c0cu, 0x24243424u, 0x242c142cu,
+    0x242c241cu, 0x242c3e04u, 0x243e042cu, 0x243e0c04u, 0x243e0c14u, 0x243e1c04u,
+    0x2c040c14u, 0x2c04240cu, 0x2c043e04u, 0x2c0c0404u, 0x2c0c0434u, 0x2c0c1434u,
+    0x2c0c2c2cu, 0x2c140c24u, 0x2c141c14u, 0x2c143e14u, 0x2c1c0414u, 0x2c1c2c1cu,
+    0x2c240c04u, 0x2c24141cu, 0x2c24143eu, 0x2c243e14u, 0x2c2c0414u, 0x2c2c1c0cu,
+    0x2c342c04u, 0x2c3e1424u, 0x2c3e2414u, 0x34041424u, 0x34042424u, 0x34042434u,
+    0x34043424u, 0x340c140cu, 0x340c340cu, 0x34140c3eu, 0x34143424u, 0x341c1c04u,
+    0x341c1c34u, 0x34242424u, 0x342c042cu, 0x342c2c14u, 0x34341c1cu, 0x343e041cu,
+    0x343e140cu, 0x3e04041cu, 0x3e04042cu, 0x3e04043eu, 0x3e040c04u, 0x3e041c14u,
+    0x3e042c14u, 0x3e0c1434u, 0x3e0c2404u, 0x3e140c14u, 0x3e14242cu, 0x3e142c14u,
+    0x3e1c0404u, 0x3e1c0c2cu, 0x3e1c1c1cu, 0x3e1c3404u, 0x3e24140cu, 0x3e24240cu,
+    0x3e2c0404u, 0x3e2c0414u, 0x3e2c1424u, 0x3e341c04u,
+};
+
+std::uint32_t d3d12_iq3xxs_grid(std::uint32_t i) {
+    return kIq3xxsGrid[i & 0xffu];
+}
+
 void q4k_scale_min(std::uint32_t j, const std::uint8_t* sc, std::int32_t* d, std::int32_t* m) {
     std::uint32_t dd, mm;
     if (j < 4u) {
@@ -166,6 +218,56 @@ float thread_chunk(ggml_type t, const std::uint8_t* w, std::uint32_t row_off, st
         }
         return (d * dy) * static_cast<float>(sc1 * lo + sc2 * hi) -
                (dmin * dy) * static_cast<float>(m1 * sl + m2 * sh);
+    }
+    if (t == GGML_TYPE_IQ3_XXS) {
+        // Fork: shaders/ggml_d3d12_mmv_iq3_xxs.hlsl. ib = itid / 2, h = itid % 2
+        // own 16 values (groups l = 2h, 2h + 1) of sub-block ib.
+        const std::uint32_t ib = itid >> 1, h = itid & 1u, e = 32u * ib + 16u * h;
+        const std::uint32_t bb = row_off + blk * 98u;
+        const float d = h2f(ld16(w, bb));
+        const std::uint32_t idx = ld32(w, bb + 2u + 8u * ib + 4u * h);
+        const std::uint32_t aux = ld32(w, bb + 66u + 4u * ib);
+        const std::int32_t ls = static_cast<std::int32_t>(2u * (aux >> 28) + 1u);
+        std::int32_t sumi = 0;
+        for (std::uint32_t k = 0; k < 2; ++k) {
+            const std::uint32_t l = 2u * h + k;
+            const std::uint32_t s7 = (aux >> (7u * l)) & 127u;
+            std::uint32_t par = s7;
+            par ^= par >> 4;
+            par ^= par >> 2;
+            par ^= par >> 1;
+            const std::uint32_t signs = s7 | ((par & 1u) << 7); // ksigns_iq2xs[s7]
+            const std::uint32_t g1 = d3d12_iq3xxs_grid((idx >> (16u * k)) & 0xffu);
+            const std::uint32_t g2 = d3d12_iq3xxs_grid((idx >> (16u * k + 8u)) & 0xffu);
+            for (std::uint32_t j = 0; j < 4; ++j) {
+                const std::int32_t v1 = static_cast<std::int32_t>((g1 >> (8u * j)) & 0xffu);
+                const std::int32_t v2 = static_cast<std::int32_t>((g2 >> (8u * j)) & 0xffu);
+                sumi += ((signs >> j) & 1u ? -v1 : v1) * qx[e + 8u * k + j];
+                sumi += ((signs >> (j + 4u)) & 1u ? -v2 : v2) * qx[e + 8u * k + 4u + j];
+            }
+        }
+        return 0.25f * (d * dy) * static_cast<float>(sumi * ls);
+    }
+    if (t == GGML_TYPE_IQ4_XS) {
+        // Fork: shaders/ggml_d3d12_mmv_iq4_xs.hlsl. ib = itid / 2, h = itid % 2
+        // own bytes 8h .. 8h + 7 of sub-block ib (values j and j + 16).
+        static const std::int8_t kv[16] = {-127, -104, -83, -65, -49, -35, -22, -10,
+                                           1,    13,   25,  38,  53,  69,  89,  113};
+        const std::uint32_t ib = itid >> 1, h = itid & 1u;
+        const std::uint32_t e_lo = 32u * ib + 8u * h, e_hi = e_lo + 16u;
+        const std::uint32_t bb = row_off + blk * 136u;
+        const std::uint32_t hdr = ld32(w, bb);
+        const float d = h2f(hdr & 0xffffu);
+        const std::uint32_t sh = hdr >> 16;
+        const std::uint32_t sl = (ld32(w, bb + 4u) >> (8u * (ib >> 1))) & 0xffu;
+        const std::int32_t ls =
+            static_cast<std::int32_t>(((sl >> (4u * (ib & 1u))) & 15u) | (((sh >> (2u * ib)) & 3u) << 4));
+        std::int32_t sumi = 0;
+        for (std::uint32_t j = 0; j < 8; ++j) {
+            const std::uint32_t q = (ld32(w, bb + 8u + 16u * ib + 8u * h + (j & ~3u)) >> (8u * (j & 3u))) & 0xffu;
+            sumi += kv[q & 15u] * qx[e_lo + j] + kv[q >> 4] * qx[e_hi + j];
+        }
+        return (d * dy) * static_cast<float>((ls - 32) * sumi);
     }
     // Q6_K
     const std::uint32_t v = itid >> 3, l0 = 4u * (itid & 7u), is = l0 >> 4;
@@ -584,6 +686,10 @@ void run_d3d12_selftest(std::vector<D3d12SelftestRow>* out) {
         #include "ggml_d3d12_mmv_q4_k_t64_dxil.h"
         #include "ggml_d3d12_mmv_q6_k_t128_dxil.h"
         #include "ggml_d3d12_mmv_q6_k_t64_dxil.h"
+        #include "ggml_d3d12_mmv_iq3_xxs_t128_dxil.h"
+        #include "ggml_d3d12_mmv_iq3_xxs_t64_dxil.h"
+        #include "ggml_d3d12_mmv_iq4_xs_t128_dxil.h"
+        #include "ggml_d3d12_mmv_iq4_xs_t64_dxil.h"
         #include "xllama/d3d12_dyn.h"
         #include "xllama/path_utils.h"
         #include "xllama/platform.h"
@@ -594,7 +700,7 @@ namespace {
 
 using d3d12c::ComPtr;
 
-enum Pso { kPsoQ40 = 0, kPsoQ4K = 1, kPsoQ6K = 2, kPsoCount = 3 };
+enum Pso { kPsoQ40 = 0, kPsoQ4K = 1, kPsoQ6K = 2, kPsoIq3Xxs = 3, kPsoIq4Xs = 4, kPsoCount = 5 };
 
 int pso_for(ggml_type t) {
     switch (t) {
@@ -604,6 +710,10 @@ int pso_for(ggml_type t) {
         return kPsoQ4K;
     case GGML_TYPE_Q6_K:
         return kPsoQ6K;
+    case GGML_TYPE_IQ3_XXS:
+        return kPsoIq3Xxs;
+    case GGML_TYPE_IQ4_XS:
+        return kPsoIq4Xs;
     default:
         return -1;
     }
@@ -730,11 +840,15 @@ bool init_gpu(Gpu& g) {
         return false;
     const void* blobs[kPsoCount][2] = {{kGgmlD3d12MmvQ40T64Dxil, kGgmlD3d12MmvQ40T128Dxil},
                                        {kGgmlD3d12MmvQ4KT64Dxil, kGgmlD3d12MmvQ4KT128Dxil},
-                                       {kGgmlD3d12MmvQ6KT64Dxil, kGgmlD3d12MmvQ6KT128Dxil}};
+                                       {kGgmlD3d12MmvQ6KT64Dxil, kGgmlD3d12MmvQ6KT128Dxil},
+                                       {kGgmlD3d12MmvIq3XxsT64Dxil, kGgmlD3d12MmvIq3XxsT128Dxil},
+                                       {kGgmlD3d12MmvIq4XsT64Dxil, kGgmlD3d12MmvIq4XsT128Dxil}};
     const size_t sizes[kPsoCount][2] = {
         {kGgmlD3d12MmvQ40T64DxilSize, kGgmlD3d12MmvQ40T128DxilSize},
         {kGgmlD3d12MmvQ4KT64DxilSize, kGgmlD3d12MmvQ4KT128DxilSize},
-        {kGgmlD3d12MmvQ6KT64DxilSize, kGgmlD3d12MmvQ6KT128DxilSize}};
+        {kGgmlD3d12MmvQ6KT64DxilSize, kGgmlD3d12MmvQ6KT128DxilSize},
+        {kGgmlD3d12MmvIq3XxsT64DxilSize, kGgmlD3d12MmvIq3XxsT128DxilSize},
+        {kGgmlD3d12MmvIq4XsT64DxilSize, kGgmlD3d12MmvIq4XsT128DxilSize}};
     for (int i = 0; i < kPsoCount; ++i) {
         for (int wd = 0; wd < 2; ++wd) {
             D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {};
@@ -1920,6 +2034,11 @@ void run_d3d12_selftest(std::vector<D3d12SelftestRow>* out) {
         {GGML_TYPE_Q4_0, "q4_0", 1024, 1024, 7},   {GGML_TYPE_Q4_K, "q4_k", 1024, 1024, 7},
         {GGML_TYPE_Q6_K, "q6_k", 1024, 1024, 7},   {GGML_TYPE_Q4_0, "q4_0", 1024, 1024, 512},
         {GGML_TYPE_Q4_K, "q4_k", 1024, 1024, 512}, {GGML_TYPE_Q6_K, "q6_k", 1024, 1024, 512},
+        // Fork: Qwen3.5-9B shapes (hidden 4096, ffn 12288).
+        {GGML_TYPE_IQ3_XXS, "iq3_xxs", 12288, 4096, 1}, {GGML_TYPE_IQ3_XXS, "iq3_xxs", 4096, 12288, 1},
+        {GGML_TYPE_IQ4_XS, "iq4_xs", 12288, 4096, 1},   {GGML_TYPE_IQ4_XS, "iq4_xs", 4096, 12288, 1},
+        {GGML_TYPE_IQ3_XXS, "iq3_xxs", 1024, 1024, 7},  {GGML_TYPE_IQ4_XS, "iq4_xs", 1024, 1024, 7},
+        {GGML_TYPE_IQ3_XXS, "iq3_xxs", 1024, 1024, 512},{GGML_TYPE_IQ4_XS, "iq4_xs", 1024, 1024, 512},
     };
     for (const auto& sc : cases)
         out->push_back(run_case(backend, sc));
