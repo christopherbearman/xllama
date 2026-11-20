@@ -881,8 +881,15 @@ void append_client_stops(JsonObject const& root, std::vector<std::string>& stops
 ::xllama::ApiTokenLimit read_max_tokens(JsonObject const& root, int n_ctx) {
     for (const char* key : {"max_completion_tokens", "max_tokens"}) {
         const winrt::hstring name = winrt::to_hstring(key);
-        if (root.HasKey(name))
-            return ::xllama::validate_max_tokens(key, root.GetNamedNumber(name), n_ctx);
+        if (root.HasKey(name)) {
+            double v = root.GetNamedNumber(name);
+            // Fork addition: a client-wide reply length (e.g. 2048) larger than a
+            // small model's context is clamped to half the context instead of
+            // refused, so one setting works across models.
+            if (std::isfinite(v) && v >= n_ctx)
+                v = n_ctx / 2;
+            return ::xllama::validate_max_tokens(key, v, n_ctx);
+        }
     }
     ::xllama::ApiTokenLimit out;
     out.value = 512;
