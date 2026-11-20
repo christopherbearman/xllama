@@ -166,7 +166,8 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent2)}
     <div class="field"><label>Creativity (temperature)</label>
       <div class="r"><input type="range" id="s-temp" min="0" max="1.5" step="0.1" style="flex:1"><b id="s-temp-v"></b></div>
       <div class="small">0.2–0.4 for code; higher for creative writing.</div></div>
-    <div class="field"><label>Max reply length (tokens)</label><input type="number" id="s-max" min="64" max="8192" step="64"></div>
+    <div class="field"><label>Max reply length (tokens)</label><input type="number" id="s-max" min="64" max="8192" step="64">
+      <div class="r" style="margin-top:8px"><label style="margin:0;display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="s-auto"> Auto-continue replies that hit the limit (up to 4 times)</label></div></div>
     <div class="field"><label>Download a model to the Xbox</label>
       <div class="r"><select id="s-pull">
         <option value="qwen35-4b">Qwen3.5 4B — best coding (2.7 GB)</option>
@@ -200,14 +201,16 @@ select:focus,input:focus,textarea:focus{border-color:var(--accent2)}
 "use strict";
 // Same origin when served by the Xbox; "?api=http://<xbox>:11434" for testing from a file.
 const API = new URLSearchParams(location.search).get("api") || "";
-const DEFAULT_SYSTEM = "You are an expert web developer and helpful assistant. Write clean, modern HTML, CSS and JavaScript when asked for code, with complete code blocks and a brief explanation. If web search results are provided, base factual answers on them and cite them like [1].";
+const DEFAULT_SYSTEM = "You are an expert web developer and helpful assistant. Write clean, modern HTML, CSS and JavaScript when asked for code, with complete code blocks and a brief explanation. If web search results are )XUI"
+    R"XUI(provided, base factual answers on them and cite them like [1].";
 const $ = s => document.querySelector(s);
 const LS = {
-  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d;)XUI"
-    R"XUI( } },
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
 };
-let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "" }, LS.get("xa.settings", {}));
+let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "", autoContinue: true }, LS.get("xa.settings", {}));
+const MAX_AUTO_CONTINUE = 4;
+const CONTINUE_PROMPT = "Your previous reply was cut off by the length limit. Continue it exactly from the point where it stopped, mid-line if needed. Do not repeat anything already written, do not add an introduction, and do not start a new code block.";
 let convs = LS.get("xa.convs", []);
 let current = null;
 let mode = "chat";
@@ -318,7 +321,9 @@ function renderMsgs() {
 function msgHtml(m, i, streaming) {
   const who = m.role === "user" ? "You" : (m.model || "Xbox");
   const body = m.role === "user" ? `<p>${esc(m.content).replace(/\n/g, "<br>")}</p>` : (m.error ? `<p class="err">${esc(m.error)}</p>` : render(m.content, streaming));
-  const meta = m.role === "assistant" && !streaming ? `<div class="meta">${m.stats ? `<span>${esc(m.stats)}</span>` : ""}<button data-act="copymsg" data-i="${i}">Copy</button>${i === current.messages.length - 1 ? `<button data-act="retry">Retry</button>` : ""}</div>` : "";
+  const last = i === current.messages.length - 1;
+  const cut = last && m.finish === "length";
+  const meta = m.role === "assistant" && !streaming ? `<div class="meta">${m.stats ? `<span>${esc(m.stats)}</span>` : ""}${cut ? `<span class="err">cut off at the length limit</span><button class="primary" data-act="continue">Continue ▸</button>` : ""}<button data-act="copymsg" data-i="${i}">Copy</button>${last ? `<button data-act="retry">Retry</button>` : ""}</div>` : "";
   return `<div class="msg ${m.role}" data-i="${i}"><div class="av">${m.role === "user" ? "You" : "AI"}</div><div class="body"><div class="who">${esc(who)}</div><div class="content${streaming ? " typing" : ""}">${body}</div>${meta}</div></div>`;
 }
 function scrollDown(force) {
@@ -352,15 +357,37 @@ async function send(textOverride) {
   current.messages.push(reply);
   renderConvList(); renderMsgs();
   const history = current.messages.slice(0, -1).filter(m => !m.error).map(m => ({ role: m.role, content: stripImages(m.content) }));
+  const isImage = /^\s*\/(image|img)\s/i.test(text);
+  const isWeb = /^\s*\/(web|search)\s/i.test(text);
+  await streamInto(reply, history, model, isImage ? "Making the picture on the Xbox…" : isWeb ? "Searching the web…" : "Waiting for the Xbox…", isImage);
+}
+
+// Continue a reply that was cut off by the length limit: the hidden
+// instruction is sent after the partial reply and the continuation is appended
+// to the same message (an opening code fence the model repeats is dropped).
+async function continueReply(auto) {
+  if (busy || !current) return;
+  const reply = current.messages[current.messages.length - 1];
+  if (!reply || reply.role !== "assistant" || !reply.content) return;
+  reply.autoCount = auto ? (reply.autoCount || 0) + 1 : 0;
+  reply.finish = "";
+  const idx = current.messages.length - 1;
+  const history = current.messages.slice(0, idx + 1).filter(m => !m.error).map(m => ({ role: m.role, content: stripImages(m.content) }));
+  history.push({ role: "user", content: CONTINUE_PROMPT });
+  const fenceOpen = (reply.content.match(/```/g) || []).length % 2 === 1;
+  await streamInto(reply, history, reply.model || $("#model").value, "Continuing…", false, { append: true, fenceOpen });
+}
+
+async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   const body = {
     model, stream: true, temperature: settings.temperature, max_tokens: settings.max_tokens,
     messages: [{ role: "system", content: settings.system || DEFAULT_SYSTEM }, ...history]
   };
   setBusy(true);
-  const isImage = /^\s*\/(image|img)\s/i.test(text);
-  const isWeb = /^\s*\/(web|search)\s/i.test(text);
-  setLiveStatus(isImage ? "Making the picture on the Xbox…" : isWeb ? "Searching the web…" : "Waiting for the Xbox…");
+  setLiveStatus(waitLabel);
   const t0 = performance.now(); let firstTok = 0; let chunks = 0;
+  const base = opt.append ? reply.content : "";
+  let added = "";
   aborter = new AbortController();
   try {
     const res = await fetch(API + "/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: aborter.signal });
@@ -379,21 +406,38 @@ async function send(textOverride) {
           if (d === "[DONE]") continue;
           let j; try { j = JSON.parse(d); } catch { continue; }
           if (j.error) throw new Error(j.error.message || "error");
-          const piece = j.choices?.[0]?.delta?.content;
-          if (piece) { if (!firstTok) { firstTok = performance.now(); setLiveStatus("Writing…"); } reply.content += piece; chunks++; paintLast(true); }
+          const ch = j.choices?.[0];
+          if (ch?.finish_reason) reply.finish = ch.finish_reason;
+          const pi)XUI"
+    R"XUI(ece = ch?.delta?.content;
+          if (piece) {
+            if (!firstTok) { firstTok = performance.now(); setLiveStatus(opt.append ? "Continuing…" : "Writing…"); }
+            added += piece; chunks++;
+            let shown = added;
+            // Drop a repeated opening fence ("```html\n") when continuing inside code.
+            if (opt.fenceOpen) shown = shown.replace(/^\s*```[\w+#.-]*[ \t]*\n?/, m => (m.includes("\n") || shown.length > m.length) ? "" : m);
+            reply.content = base + (opt.append && base && !/\s$/.test(base) && /^\s/.test(shown) ? "" : "") + shown;
+            paintLast(true);
+          }
         }
       }
     }
     const secs = (performance.now() - t0) / 1000;
-    reply.stats = isImage ? `picture in ${secs.toFixed(1)} s` :
+    const st = isImage ? `picture in ${secs.toFixed(1)} s` :
       firstTok ? `${secs.toFixed(1)} s · first word after ${((firstTok - t0) / 1000).toFixed(1)} s · ~${(chunks / Math.max(0.1, (performance.now() - firstTok) / 1000)).toFixed(1)} tok/s` : `${secs.toFixed(1)} s`;
+    reply.stats = opt.append ? (reply.stats ? reply.stats + " · continued" : st) : st;
     if (!reply.content) reply.error = "The Xbox returned an empty reply.";
   } catch (e) {
-    if (e.name === "AbortError") { reply.stats = "stopped"; if (!reply.content) reply.error = "Stopped."; }
+    if (e.name === "AbortError") { reply.stats = "stopped"; reply.finish = ""; if (!reply.content) reply.error = "Stopped."; }
     else reply.error = /Failed to fetch|NetworkError|Load failed/i.test(e.message) ? "Couldn't reach the Xbox. Is xllama open on the console?" : "Error: " + e.message;
   } finally {
     setBusy(false); aborter = null; setLiveStatus("");
     current.updated = Date.now(); saveConvs(); renderConvList(); renderMsgs(); poll();
+  }
+  // Auto-continue a cut-off reply (bounded so it can never loop forever).
+  if (reply.finish === "length" && !reply.error && settings.autoContinue && (reply.autoCount || 0) < MAX_AUTO_CONTINUE) {
+    setLiveStatus("Reply hit the length limit, continuing automatically…");
+    setTimeout(() => continueReply(true), 700);
   }
 }
 function paintLast(streaming) {
@@ -412,9 +456,9 @@ $("#msgs").addEventListener("click", async e => {
   const act = b.dataset.act;
   if (act === "copy") { await copy(codeStore[+b.dataset.id].code); toast("Copied"); }
   if (act === "save") { const c = codeStore[+b.dataset.id]; download(c.code, "code." + extFor(c.lang)); }
-  if (act)XUI"
-    R"XUI( === "preview") { openPreview(codeStore[+b.dataset.id].code); }
+  if (act === "preview") { openPreview(codeStore[+b.dataset.id].code); }
   if (act === "copymsg") { await copy(current.messages[+b.dataset.i].content); toast("Copied"); }
+  if (act === "continue") { continueReply(false); return; }
   if (act === "retry") { current.messages.pop(); send(current.messages[current.messages.length - 1]?.content); }
 });
 function extFor(l) { l = (l || "").toLowerCase(); return { html: "html", htm: "html", css: "css", js: "js", javascript: "js", ts: "ts", typescript: "ts", json: "json", python: "py", py: "py", php: "php", sh: "sh", bash: "sh", svg: "svg", md: "md" }[l] || "txt"; }
@@ -480,11 +524,12 @@ $("#b-logs").onclick = () => { show("#m-logs"); loadLogs(); };
 $("#logs-refresh").onclick = loadLogs;
 async function loadLogs() { $("#logbox").textContent = "Loading…"; try { const j = await (await fetch(API + "/v1/debug/log", { cache: "no-store" })).json(); $("#logbox").textContent = j.log; const c = $("#logbox").parentElement; c.scrollTop = c.scrollHeight; } catch { $("#logbox").textContent = "Couldn't reach the Xbox."; } }
 $("#b-settings").onclick = () => {
-  $("#s-system").value = settings.system; $("#s-temp").value = settings.temperature; $("#s-temp-v").textContent = settings.temperature; $("#s-max").value = settings.max_tokens; show("#m-settings");
+  $("#s-system").value = settings.system; $("#s-temp").value = settings.temperature; $("#s-temp-v").textContent = settings.temperature; $("#s-max").value = settings.max_tokens; $("#s-auto").checked = settings.autoContinue !== false; show("#m-settings");
 };
 $("#s-system").oninput = () => { settings.system = $("#s-system").value; LS.set("xa.settings", settings); };
 $("#s-system-reset").onclick = () => { settings.system = DEFAULT_SYSTEM; $("#s-system").value = DEFAULT_SYSTEM; LS.set("xa.settings", settings); };
 $("#s-temp").oninput = () => { settings.temperature = +$("#s-temp").value; $("#s-temp-v").textContent = settings.temperature; LS.set("xa.settings", settings); };
+$("#s-auto").onchange = () => { settings.autoContinue = $("#s-auto").checked; LS.set("xa.settings", settings); };
 $("#s-max").onchange = () => { settings.max_tokens = Math.max(64, Math.min(8192, +$("#s-max").value || 2048)); LS.set("xa.settings", settings); };
 $("#s-key-go").onclick = async () => {
   try { const r = await fetch(API + "/v1/config/web-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: $("#s-key").value.trim() }) }); const j = await r.json(); $("#s-key-st").textContent = "Saved. Provider: " + (j.provider || "?"); $("#s-key").value = ""; poll(); }
