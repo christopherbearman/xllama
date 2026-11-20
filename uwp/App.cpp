@@ -17,6 +17,7 @@
 #ifndef XLLAMA_STORE_SKU
 #include "api-server.h"
 #include <winrt/Windows.Foundation.Metadata.h>
+#include <winrt/Windows.System.Display.h>
 #include <filesystem>
 #include <system_error>
 #endif
@@ -304,6 +305,16 @@ void App::OnLaunched(LaunchActivatedEventArgs const&) {
         Window::Current().Content(m_controller->Root());
         log_write("[xllama] Window.Content set\n");
         Window::Current().Activate();
+        // Fork addition (server use): keep the console awake while xllama is
+        // open, so the screen does not dim and the console does not treat
+        // itself as idle while the LAN API serves requests.
+        try {
+            static winrt::Windows::System::Display::DisplayRequest s_keep_awake;
+            s_keep_awake.RequestActive();
+            log_write("[xllama] keep-awake: DisplayRequest active\n");
+        } catch (...) {
+            log_write("[xllama] keep-awake: DisplayRequest failed\n");
+        }
         log_write("[xllama] Window activated\n");
 
     #ifndef XLLAMA_STORE_SKU

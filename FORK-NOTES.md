@@ -1,5 +1,22 @@
 # Fork notes (christopherbearman/xllama)
 
+## Use the Xbox as a server
+
+Open **`http://<console-ip>:11434/ui`** in any browser on the network (Mac,
+phone, tablet). It is a full chat app served by xllama itself: streaming
+chat, model picker and downloads, Web search and Image modes, code blocks with
+copy / save / live HTML preview, chats saved in that browser, and a status,
+log and settings panel. Source: `uwp/web/index.html`; after editing run
+`python3 scripts/embed-web-ui.py` to regenerate `uwp/web-ui-html.h`.
+
+Server behaviour (1.9.0):
+
+- API requests **queue** (up to 5 minutes) instead of answering `busy`.
+- xllama holds a **DisplayRequest** while open, so the console stays awake.
+- `GET /v1/debug/status` reports `version` and `uptime_s`.
+- xllama must stay **open on screen** (UWP apps stop in the background) and
+  must be set to **App type: Game** after every install.
+
 Experimental changes on top of upstream xllama 1.7.0, packaged as **1.8.0**.
 Not console-benchmarked by upstream.
 

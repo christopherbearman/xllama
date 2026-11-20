@@ -14,6 +14,7 @@
 // guard). Sockets + Json are the WinRT namespaces pch.h does not already pull in.
 #include "pch.h"
 #include <atomic>
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/Windows.Networking.Sockets.h>
 #include <winrt/Windows.System.Threading.h>
@@ -22,6 +23,7 @@
     #include "inference-bridge.h"
     #include "model-downloader.h"
     #include "web-fetch.h"
+    #include "web-ui-html.h"
     #include "xllama/api_activity.h"
     #include "xllama/api_connection.h"
     #include "xllama/api_policy.h"
@@ -61,6 +63,7 @@
     #include <memory>
     #include <mutex>
     #include <string>
+    #include <thread>
     #include <vector>
 
 namespace xllama::api {
@@ -85,8 +88,17 @@ std::atomic<uint64_t> g_req_counter{0}; // monotonic, for unique response ids
 // Acquire the hub after compute admission. Busy (for example, a KV snapshot
 // save) → unowned lock, caller answers 503. Startup pre-load waiting belongs
 // to acquire_compute_job_or_busy(), before this mutex is touched.
+// Fork addition (server use): wait for the hub instead of failing at once.
+// The compute lease is taken first, so the hub is normally free; this only
+// covers a GUI turn or a preload finishing up.
 std::unique_lock<std::mutex> acquire_hub_or_busy() {
     auto& hub = ::xllama::session_hub();
+    for (int i = 0; i < 240; ++i) { // up to 60 s
+        std::unique_lock<std::mutex> lk(hub.mtx, std::try_to_lock);
+        if (lk.owns_lock())
+            return lk;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
     return std::unique_lock<std::mutex>(hub.mtx, std::try_to_lock);
 }
 
@@ -94,8 +106,21 @@ std::unique_lock<std::mutex> acquire_hub_or_busy() {
 // startup pre-load is the only admitted job that API clients wait behind;
 // every other occupied slot keeps the existing bounded busy response. The
 // returned handle must stay alive for the whole reply, including SSE tokens.
+// Fork addition (server use): queue. A request that arrives while another
+// job (chat turn, image, pull) runs waits up to 5 minutes for its turn
+// instead of getting an immediate 503 "busy", so a chat UI like Open WebUI
+// does not show errors when two things overlap.
 ::xllama::ComputeJobAdmission::Handle acquire_compute_job_or_busy() {
-    return ::xllama::try_acquire_compute_job_while_preloading(::xllama::session_hub().preloading);
+    using clock = std::chrono::steady_clock;
+    const auto deadline = clock::now() + std::chrono::minutes(5);
+    while (true) {
+        if (auto permit = ::xllama::try_acquire_compute_job_while_preloading(
+                ::xllama::session_hub().preloading))
+            return permit;
+        if (clock::now() >= deadline)
+            return {};
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
 }
 
 std::mutex g_state_mtx;
@@ -179,6 +204,18 @@ std::string debug_log_json() {
     return "{\"log\":" + json_string_value(all.substr(pos)) + "}";
 }
 
+const auto g_process_start = std::chrono::steady_clock::now();
+
+std::string app_version() {
+    try {
+        const auto v = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
+        return std::to_string(v.Major) + "." + std::to_string(v.Minor) + "." +
+               std::to_string(v.Build) + "." + std::to_string(v.Revision);
+    } catch (...) {
+        return "unknown";
+    }
+}
+
 std::string debug_status_json() {
     auto& hub = ::xllama::session_hub();
     std::string model = "(busy)";
@@ -194,7 +231,12 @@ std::string debug_status_json() {
         usage_mb = winrt::Windows::System::MemoryManager::AppMemoryUsage() / (1024ull * 1024ull);
     } catch (...) {
     }
-    return "{\"resident_model\":" + json_string_value(model) +
+    const long long uptime_s = std::chrono::duration_cast<std::chrono::seconds>(
+                                   std::chrono::steady_clock::now() - g_process_start)
+                                   .count();
+    return "{\"version\":" + json_string_value(app_version()) +
+           ",\"uptime_s\":" + std::to_string(uptime_s) +
+           ",\"resident_model\":" + json_string_value(model) +
            ",\"app_memory_limit_mb\":" + std::to_string(limit_mb) +
            ",\"app_memory_usage_mb\":" + std::to_string(usage_mb) +
            ",\"working_set_mb\":" + std::to_string(::xllama::working_set_mb()) +
@@ -387,6 +429,17 @@ void write_response(StreamSocket const& socket, const char* status, const std::s
     // (handled separately in handle_connection).
     out += "\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
     out += json;
+    write_raw(socket, out);
+}
+
+// Fork addition: the built-in chat web app (uwp/web/index.html) at GET /ui.
+void write_html(StreamSocket const& socket, const char* html) {
+    const std::string body(html);
+    std::string out = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                      "Cache-Control: no-cache\r\nContent-Length: ";
+    out += std::to_string(body.size());
+    out += "\r\nConnection: close\r\n\r\n";
+    out += body;
     write_raw(socket, out);
 }
 
@@ -2259,6 +2312,13 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
         // Health probe (also the spike gate: curl http://<ip>:<port>/ -> 200).
         if (req.method == "GET" && (req.path == "/" || req.path == "/health")) {
             write_response(socket, "200 OK", "{\"status\":\"ok\",\"service\":\"xllama\"}");
+            return;
+        }
+
+        // Fork addition: built-in chat web app.
+        if (req.method == "GET" &&
+            (req.path == "/ui" || req.path == "/ui/" || req.path == "/app")) {
+            write_html(socket, web_ui_html());
             return;
         }
 
