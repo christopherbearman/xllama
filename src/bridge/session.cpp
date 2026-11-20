@@ -437,6 +437,7 @@ std::unique_ptr<Session> create_ort(const SessionParams& sp, std::string* err) {
 
     #include "decode_loop.h" // shared prefill + generation loops; needs llama.h
     #include "llama_gpu.h"
+    #include "xllama/ggml_d3d12.h" // fork: per-phase GPU counters in chat
     #include "sampler_chain.h" // shared sampler chain (#125); needs llama.h
     #include "xllama/llama_raii.h"
 
@@ -833,6 +834,8 @@ class LlamaSession final : public Session {
         // LOGICAL batch only — the physical ubatch stays 512 (#172 optimum),
         // which is what the prefill rate was measured on.
         InferenceWatchdog wd(gp.progress(), gp.abort_flag);
+        if (m_gpu_layers > 0)
+            ggml_d3d12_take_stats(nullptr); // fork: start the prefill counters clean
         wd.enter_prefill(n_pf);
         const auto t_prefill0 = std::chrono::steady_clock::now();
         if (!in_place && !prefill_chunked(ctx, pf, n_pf, &wd)) {
@@ -869,6 +872,12 @@ class LlamaSession final : public Session {
         // chain must not run (the repetition penalty can flip the argmax).
         // #175: reuse the chain on a continuation turn with unchanged sampling,
         // so penalty/RNG state crosses turn boundaries exactly as the KV does.
+        if (m_gpu_layers > 0) {
+            // Fork: where prefill time went (GPU vs handover vs activation quantize).
+            D3d12PhaseStats ps;
+            if (ggml_d3d12_take_stats(&ps))
+                log_output(format_d3d12_phase("prefill", ps));
+        }
         const SamplingConfig sc = gp.sampling();
         if (full_prompt || !m_sampler || !same_chain(m_sampler_cfg, sc)) {
             const llama_sampler_chain_params sparams = llama_sampler_chain_default_params();
@@ -933,6 +942,19 @@ class LlamaSession final : public Session {
         dlp.watchdog = &wd;
         wd.enter_decode(n_predict_eff);
         const DecodeLoopResult dlr = decode_loop(dlp, res.output_text);
+        if (m_gpu_layers > 0) {
+            // Fork: the same split for generation; wall_ms against the decode
+            // time shows how much of each token is CPU work outside the GPU calls.
+            D3d12PhaseStats ds;
+            if (ggml_d3d12_take_stats(&ds)) {
+                log_output(format_d3d12_phase("decode", ds));
+                char db[160];
+                snprintf(db, sizeof(db),
+                         "[xllama] d3d12-decode tokens=%d per_token_calls=%.1f\n", dlr.n_generated,
+                         dlr.n_generated > 0 ? static_cast<double>(ds.calls) / dlr.n_generated : 0.0);
+                log_output(db);
+            }
+        }
         const int n_generated = dlr.n_generated;
         const bool stopped_by_seq = dlr.ended_with_stop;
 

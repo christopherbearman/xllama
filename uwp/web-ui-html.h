@@ -289,6 +289,14 @@ function xaInject(CHECK, TOKEN) {
   }
   window.addEventListener("error", function (e) { if (e.target && e.target !== window) return; add("major", "JavaScript error: " + e.message + (e.lineno ? " (line " + e.lineno + ")" : "")); }, true);
   window.addEventListener("unhandledrejection", function (e) { add("major", "Unhandled promise error: " + ((e.reason && e.reason.message) || e.reason)); });
+  var missed = {};
+  var gidO = Document.prototype.getElementById, qsO = Document.prototype.querySelector;
+  try {
+    var gid = gidO;
+    Document.prototype.getElementById = function (id) { var r = gid.call(this, id); if (!r) missed["#" + id] = "getElementById(\"" + id + "\")"; return r; };
+    var qs = qsO;
+    Document.prototype.querySelector = function (sel) { var r = qs.call(this, sel); if (!r) missed[sel] = "querySelector(\"" + sel + "\")"; return r; };
+  } catch (e) { }
   var ce = console.error; console.error = function () { try { add("minor", "console.error: " + [].map.call(arguments, String).join(" ").slice(0, 200)); } catch (x) { } return ce.apply(console, arguments); };
   var done = false;
   function desc(el) {
@@ -315,7 +323,8 @@ function xaInject(CHECK, TOKEN) {
     return false;
   }
   function clipper(el) {
-    for (var p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+    fo)XUI"
+    R"XUI(r (var p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
       var cs = getComputedStyle(p); if (cs.overflowX !== "visible" || cs.overflowY !== "visible") return p;
     } return null;
   }
@@ -324,8 +333,7 @@ function xaInject(CHECK, TOKEN) {
     try {
       var W = innerWidth, H = innerHeight, de = document.documentElement, b = document.body;
       if (!b) { add("major", "The page has no <body>."); return post(); }
-      va)XUI"
-    R"XUI(r bcs = getComputedStyle(b), dcs = getComputedStyle(de);
+      var bcs = getComputedStyle(b), dcs = getComputedStyle(de);
       var hidX = bcs.overflowX === "hidden" || dcs.overflowX === "hidden", hidY = bcs.overflowY === "hidden" || dcs.overflowY === "hidden";
       var all = b.querySelectorAll("*"), items = [];
       for (var i = 0; i < all.length && i < 2500; i++) {
@@ -388,12 +396,14 @@ function xaInject(CHECK, TOKEN) {
             sel = sel.trim(); if (unused.length >= 8 || !/[.#]/.test(sel) || st.test(sel)) return;
             var s2 = sel.replace(/::?[\w-]+(\([^)]*\))?/g, function (m) { return /^:(nth-|first-|last-|only-|not|is|where|has|root|empty)/.test(m) ? m : ""; }).trim();
             if (!s2) return;
-            try { if (!document.querySelector(s2)) unused.push(sel); } catch (e) { }
+            try { if (!qsO.call(document, s2)) unused.push(sel); } catch (e) { }
           });
         }
       };
       for (var q = 0; q < document.styleSheets.length; q++) { try { walk(document.styleSheets[q].cssRules); } catch (e) { } }
       if (unused.length) add("minor", "These CSS rules match nothing in the page, so they have no effect (check the class names and the HTML structure match): " + unused.join(", "));
+      var lost = Object.keys(missed).filter(function (k) { try { return !(k.charAt(0) === "#" ? gidO.call(document, k.slice(1)) : qsO.call(document, k)); } catch (e) { return false; } });
+      if (lost.length) add("major", "The script looks up " + lost.slice(0, 4).map(function (k) { return missed[k]; }).join(", ") + " but nothing on the page has that id or matches that selector, so whatever it does to it never happens. Give the element that id when you create it (element.id = ... or setAttribute(\"id\", ...)), or look it up the way it was created.");
       var code = [].map.call(document.scripts, function (x) { return x.textContent; }).filter(function (t) { return t.indexOf("xaInject") < 0; }).join("\n");
       var trig = code.match(/Math\.(sin|cos|tan)\((?:[^()]|\([^()]*\))*\)/g) || [];
       var degCalls = trig.filter(function (c) { return !/PI|rad/i.test(c) && /\b(30|45|60|90|180|270|360|6)\b|deg/i.test(c); });
@@ -456,7 +466,8 @@ function checkPage(html) {
     const on = e => { if (e.data && e.data.xa === token) end(e.data.issues || []); };
     window.addEventListener("message", on);
     const t = setTimeout(() => end(null), 12000);
-    f.srcdoc = injectInto(html, true, token);
+    f.srcdoc = injec)XUI"
+    R"XUI(tInto(html, true, token);
     box.appendChild(f); document.body.appendChild(box);
   });
 }
@@ -481,8 +492,7 @@ function htmlFrom(text) {
 }
 
 // ---------- live indicator ----------
-const live = { on: false, stage: "")XUI"
-    R"XUI(, t0: 0, chars: 0, toks: 0, tFirst: 0, timer: 0, think: false };
+const live = { on: false, stage: "", t0: 0, chars: 0, toks: 0, tFirst: 0, timer: 0, think: false };
 function liveStart(stage, think) {
   Object.assign(live, { on: true, stage, t0: performance.now(), chars: 0, toks: 0, tFirst: 0, think: !!think });
   $("#live").classList.add("on"); liveSet(stage);
@@ -666,7 +676,8 @@ async function send(textOverride) {
   if (isImage && settings.imageThink) {
     const desc = text.replace(/^\s*\/(image|img)\s+/i, "");
     reply.model = model;
-    await streamInto(reply, [{ role: "user", content: desc }], model, "Thinking up the picture", false, { think: true, system: IMAGE_PROMPT_SYSTEM, maxTokens: 1500, noAuto: true, thinkBudget: 400 });
+    await strea)XUI"
+    R"XUI(mInto(reply, [{ role: "user", content: desc }], model, "Thinking up the picture", false, { think: true, system: IMAGE_PROMPT_SYSTEM, maxTokens: 1500, noAuto: true, thinkBudget: 400 });
     if (reply.error || reply.stopped) return;
     if (reply.finish === "length") await continueReply(false); // prompt cut by the budget: finish it
     if (reply.error || reply.stopped) return;
@@ -677,8 +688,7 @@ async function send(textOverride) {
     await streamInto(reply, [{ role: "user", content: "/image " + prompt }], model, "Making the picture", true, { append: true });
     return;
   }
-  await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", i)XUI"
-    R"XUI(sImage, { think: build && settings.think, thinkBudget: THINK_BUDGET_CHARS });
+  await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", isImage, { think: build && settings.think, thinkBudget: THINK_BUDGET_CHARS });
 }
 
 // Continue a reply cut off by the length limit (or a plan cut by the thinking
@@ -801,6 +811,7 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
     setTimeout(() => continueReply(true), 700);
     return;
   }
+  if (reply.patchBase && !reply.error && !reply.stopped && reply.finish !== "length") { finishPatchReply(reply); saveConvs(); renderMsgs(); }
   if (reply.build && settings.autoCheck && !reply.error && !reply.stopped && reply.finish !== "length") autoCheck(reply);
 }
 
@@ -827,25 +838,80 @@ async function autoCheck(reply) {
     saveConvs(); renderMsgs(); return;
   }
   const list = issues.map((x, i) => `${i + 1}. ${x.msg}`).join("\n");
-  // The fix request carries the whole page. Code runs ~3.3 characters a token,
-  // so past ~11,500 characters (~3,500 tokens) the page, the request, the
-  // Build rules (~450) and a full rewrite of the page no longer fit the
-  // 8,192-token context; a fix written without the page is a blind rewrite.
-  if (html.length > 11500) {
+  // Patch mode: the model answers with small SEARCH/REPLACE edits, not a
+  // rewrite, so only the page itself has to fit. Code runs ~3.3 characters a
+  // token: past ~18,000 characters (~5,500 tokens) the page, the request and
+  // the Build rules leave under the 1,024-token floor for the patches.
+  if (html.length > 18000) {
     conv.messages.push({ role: "user", auto: "check", label: `🔍 Auto-check found ${major.length} problem${major.length > 1 ? "s" : ""}, but this page (~${Math.round(html.length / 3.3 / 100) * 100} tokens) is too big to send back for an automatic fix. Fix them by hand, or paste the page into a new chat with the list below.`, issues, content: "" });
     saveConvs(); renderMsgs(); return;
   }
-  const report = `I opened your page in a browser (1280×800 window) and an automatic check found these problems:\n${list}\n\nFix every problem, and also make sure the page includes everything the original request asked for. Reply with the complete corrected file in one \`\`\`html code block, keeping everything that already works.`;
+  const report = `I opened your page in a browser (1280×800 window) and an automatic check found these problems:\n${list}\n\n` + PATCH_RULES;
   conv.messages.push({ role: "user", auto: "check", label: `🔍 Auto-check found ${major.length} problem${major.length > 1 ? "s" : ""}, asking for a fix (round ${round + 1} of ${MAX_FIX_ROUNDS})`, issues, content: report });
-  const fix = { role: "assistant", content: "", model: reply.model, build: true, fixRound: round + 1 };
+  const fix = { role: "assistant", content: "", model: reply.model, build: true, fixRound: round + 1, patchBase: html };
   conv.messages.push(fix);
   renderMsgs();
   const orig = unBuild(lastUser(conv.messages.length - 1)?.content || "");
   // One self-contained message: the server can trim its reply cap but never
   // drops the final message, so the page can no longer silently vanish.
-  const one = "The original request was:\n" + orig.slice(0, 2500) + "\n\nHere is the current page:\n```html\n" + html + "\n```\n\n" + report;
+  const one = "The original request was:\n" + orig.slice(0, 1500) + "\n\nHere is the current page:\n```html\n" + html + "\n```\n\n" + report;
   const history = [{ role: "user", content: one }];
-  await streamInto(fix, history, reply.model || $("#model").value, "Fixing the problems", false, { think: settings.think && html.length < 6000, thinkBudget: THINK_BUDGET_CHARS });
+  await streamInto(fix, history, reply.model || $("#model").value, "Writing the fixes", false, {});
+}
+
+const PATCH_RULES = `Fix every problem. Reply ONLY with )XUI"
+    R"XUI(SEARCH/REPLACE patches: no complete file and no explanation. Write each change exactly like this:
+<<<<<<< SEARCH
+existing lines copied exactly from the page
+=======
+the new lines that replace them
+>>>>>>> REPLACE
+Rules: copy the SEARCH lines exactly as they appear in the page (same spelling and indentation); keep each SEARCH to a few lines so it matches only one place; use as many blocks as you need; to add new code, SEARCH for a nearby existing line and REPLACE it with that same line plus the new code.`;
+
+// Apply SEARCH/REPLACE blocks to |page|. Exact text first; otherwise the same
+// lines ignoring indentation and blank lines. Returns { html, applied, total }.
+function applyPatches(page, text) {
+  const re = /<{5,9} ?SEARCH[^\n]*\n([\s\S]*?)\n?={5,9}[^\n]*\n([\s\S]*?)\n?>{5,9} ?REPLACE/g;
+  let m, applied = 0, total = 0, out = page;
+  while ((m = re.exec(text))) {
+    total++;
+    const find = m[1].replace(/\r/g, ""), repl = m[2].replace(/\r/g, "");
+    if (find && out.includes(find)) { out = out.replace(find, () => repl); applied++; continue; }
+    const want = find.split("\n").map(l => l.trim()).filter(Boolean);
+    if (!want.length) continue;
+    const lines = out.split("\n");
+    let done = false;
+    for (let i = 0; i < lines.length && !done; i++) {
+      if (lines[i].trim() !== want[0]) continue;
+      let j = i, k = 0;
+      while (j < lines.length && k < want.length) {
+        if (!lines[j].trim()) { j++; continue; }
+        if (lines[j].trim() !== want[k]) break;
+        j++; k++;
+      }
+      if (k === want.length) {
+        lines.splice(i, j - i, ...repl.split("\n"));
+        out = lines.join("\n"); applied++; done = true;
+      }
+    }
+  }
+  return { html: out, applied, total };
+}
+
+// A finished patch reply becomes the patched page, so it can be previewed,
+// copied and checked again like any other reply.
+function finishPatchReply(reply) {
+  const base = reply.patchBase; delete reply.patchBase;
+  const ans = answerOf(reply.content);
+  const r = applyPatches(base, ans);
+  let page = r.html, note;
+  if (r.total && r.applied) note = `✓ Applied ${r.applied} of ${r.total} change${r.total > 1 ? "s" : ""} to the page.`;
+  else {
+    const full = htmlFrom(ans); // the model ignored the format and rewrote the file
+    if (full && full.length > base.length * 0.5) { page = full; note = "The model sent a whole new page instead of patches; using it."; }
+    else { reply.error = r.total ? "None of the model's changes matched the page, so nothing was applied." : "The model didn't send any changes in the expected format."; return; }
+  }
+  reply.content = ans.trim() + "\n\n" + note + "\n\n**Patched page:**\n```html\n" + page + "\n```";
 }
 
 function paintLast(streaming) {
@@ -864,8 +930,7 @@ $("#msgs").addEventListener("click", async e => {
   const act = b.dataset.act;
   if (act === "copy") { await copy(codeStore[+b.dataset.id].code); toast("Copied"); }
   if (act === "save") { const c = codeStore[+b.dataset.id]; download(c.code, "code." + extFor(c.lang)); }
-  if (act === "preview") { openPreview(codeStore[+b.datas)XUI"
-    R"XUI(et.id].code); }
+  if (act === "preview") { openPreview(codeStore[+b.dataset.id].code); }
   if (act === "copymsg") { await copy(answerOf(current.messages[+b.dataset.i].content)); toast("Copied"); }
   if (act === "continue") { continueReply(false); return; }
   if (act === "retry") {
@@ -961,7 +1026,8 @@ $("#s-key-go").onclick = async () => {
   catch { $("#s-key-st").textContent = "Couldn't reach the Xbox."; }
 };
 $("#s-pull-go").onclick = async () => {
-  const name = $("#s-pull").value; const st = $("#s-pull-st"); st.textContent = "Starting…";
+  const na)XUI"
+    R"XUI(me = $("#s-pull").value; const st = $("#s-pull-st"); st.textContent = "Starting…";
   try {
     const r = await fetch(API + "/api/pull", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name }) });
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
