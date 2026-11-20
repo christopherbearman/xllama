@@ -63,7 +63,9 @@ class ClipTokenizer {
     }
 
     // Encode to exactly kMaxLength ids: [bos] + tokens + [eos], pad with pad id.
-    std::vector<int> encode(const std::string& text) const {
+    // pad_with_eos: SD1.x tokenizers (e.g. LCM_Dreamshaper_v7) declare
+    // pad_token "<|endoftext|>" (49407) instead of SD2's "!" (id 0).
+    std::vector<int> encode(const std::string& text, bool pad_with_eos = false) const {
         std::vector<int> ids;
         ids.push_back(kBos);
         for (const std::string& word : pretokenize(clean(text))) {
@@ -77,7 +79,7 @@ class ClipTokenizer {
         if ((int)ids.size() >= kMaxLength)
             ids.resize(kMaxLength - 1);
         ids.push_back(kEos);
-        const int pad_id = pad_id_();
+        const int pad_id = pad_with_eos ? kEos : pad_id_();
         while ((int)ids.size() < kMaxLength)
             ids.push_back(pad_id);
         return ids;

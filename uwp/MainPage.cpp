@@ -13,6 +13,7 @@
     #endif
     #include "chat-history.h"
     #include "inference-bridge.h"
+    #include "web-fetch.h"
     #include "xllama/cancel_policy.h"
     #include "xllama/chat_prompt.h"
     #include "xllama/compute_admission.h"
@@ -30,6 +31,7 @@
     #include "xllama/stability_attribution.h"
     #include "xllama/training.h"
     #include "xllama/utf8_utils.h"
+    #include "xllama/web_search.h"
 
     #include <winrt/Windows.Data.Json.h>
     #include <winrt/Windows.Networking.Connectivity.h>
@@ -2402,6 +2404,15 @@ winrt::fire_and_forget MainPageController::ShowImageDialog() {
     taesdToggle.IsOn(self->m_diffuse_taesd);
     panel.Children().Append(taesdToggle);
 
+    // Fork addition: pick the image model. LCM DreamShaper v7 (SD1.5-class,
+    // 4 steps) downloads from the catalogue on first use (~2.1 GB).
+    static bool s_use_lcm = false;
+    winrt::Windows::UI::Xaml::Controls::ToggleSwitch lcmToggle;
+    lcmToggle.Header(
+        winrt::box_value(L"Better quality: LCM DreamShaper v7 (4 steps, ~2.1 GB first download)"));
+    lcmToggle.IsOn(s_use_lcm);
+    panel.Children().Append(lcmToggle);
+
     winrt::Windows::UI::Xaml::Controls::TextBlock note;
     note.TextWrapping(TextWrapping::Wrap);
     note.Opacity(0.7);
@@ -2455,6 +2466,9 @@ winrt::fire_and_forget MainPageController::ShowImageDialog() {
     self->m_diffuse_seed = static_cast<uint32_t>(requested_seed);
     self->m_diffuse_taesd = taesdToggle.IsOn();
     self->SaveSettings();
+    s_use_lcm = lcmToggle.IsOn();
+    const bool use_lcm = s_use_lcm;
+    const wchar_t* kGenModel = use_lcm ? L"lcm-dreamshaper-v7" : kDiffusionModel;
 
     // Ensure the diffusion model is present; download it from the catalogue if
     // missing (kind "diffusion" entries never reach the chat picker).
@@ -2464,17 +2478,16 @@ winrt::fire_and_forget MainPageController::ShowImageDialog() {
         L"261497cf8e9ed613ed1fa5ddf48af32cdf50545b2ccd9edd7eacc91fb9255d6e";
     {
         auto local = ApplicationData::Current().LocalFolder();
-        std::wstring model_dir =
-            std::wstring(local.Path().c_str()) + L"\\models\\" + kDiffusionModel;
+        std::wstring model_dir = std::wstring(local.Path().c_str()) + L"\\models\\" + kGenModel;
         std::error_code ec;
         const bool present = std::filesystem::exists(
                                  std::filesystem::path(model_dir) / L"unet" / L"model.onnx", ec) ||
                              ModelDownloader::IsComplete(model_dir);
         if (!present) {
             auto manifest = ::xllama::LoadModelManifest();
-            auto* entry = ::xllama::FindManifestEntry(manifest, kDiffusionModel);
+            auto* entry = ::xllama::FindManifestEntry(manifest, kGenModel);
             if (!entry || entry->hf_base_url.empty() || entry->files.empty()) {
-                self->SetStatus(std::wstring(L"Model '") + kDiffusionModel +
+                self->SetStatus(std::wstring(L"Model '") + kGenModel +
                                     L"' not found. Provision it via Device Portal "
                                     L"(see diffusion/README.md).",
                                 StatusKind::Error);
@@ -2485,7 +2498,9 @@ winrt::fire_and_forget MainPageController::ShowImageDialog() {
                 self->SetStatus(L"Cannot create the diffusion model dir", StatusKind::Error);
                 co_return;
             }
-            self->SetStatus(L"Downloading image model (~2.4 GB)...", StatusKind::Working);
+            self->SetStatus(use_lcm ? L"Downloading LCM image model (~2.1 GB)..."
+                                    : L"Downloading image model (~2.4 GB)...",
+                            StatusKind::Working);
             self->m_loadingBar.IsIndeterminate(false);
             self->m_loadingBar.Value(0);
             self->m_loadingBar.Visibility(winrt::Windows::UI::Xaml::Visibility::Visible);
@@ -2513,7 +2528,7 @@ winrt::fire_and_forget MainPageController::ShowImageDialog() {
 
         // TAESD: drop-in tiny VAE (~5 MB) overwrites vae_decoder/model.onnx in the
         // same sd-turbo-fp16 tree (models-v1 assets kTaesdVaeRemote + MIT licence).
-        if (self->m_diffuse_taesd) {
+        if (self->m_diffuse_taesd && !use_lcm) { // TAESD overlay is SD-Turbo-only
             auto manifest = ::xllama::LoadModelManifest();
             auto* entry = ::xllama::FindManifestEntry(manifest, kDiffusionModel);
             if (!entry || entry->hf_base_url.empty()) {
@@ -2557,7 +2572,10 @@ winrt::fire_and_forget MainPageController::ShowImageDialog() {
         self->SetStatus(L"Enter an image prompt first", StatusKind::Error);
         co_return;
     }
-    const int steps = (int)stepsSlider.Value();
+    // LCM needs ~4 steps; treat the SD-Turbo default of 1 as "use 4".
+    int steps = (int)stepsSlider.Value();
+    if (use_lcm && steps < 2)
+        steps = 4;
     const uint32_t seed = self->m_diffuse_seed == 0
                               ? static_cast<uint32_t>(GetTickCount64() % 1'000'000'000ULL) + 1
                               : self->m_diffuse_seed;
@@ -2575,7 +2593,9 @@ winrt::fire_and_forget MainPageController::ShowImageDialog() {
     write_local_bytes(L"prompt.txt", prompt_utf8);
     write_local_bytes(L"diffuse-steps.txt", std::to_string(steps));
     write_local_bytes(L"diffuse-seed.txt", std::to_string(seed));
-    write_local_bytes(L"diffuse-model.txt", "sd-turbo-fp16");
+    write_local_bytes(L"diffuse-model.txt",
+                      use_lcm ? std::string("lcm-dreamshaper-v7") : std::string("sd-turbo-fp16"));
+    write_local_bytes(L"diffuse-guidance.txt", "8");
 
     self->StartDiffusion(std::move(compute_permit));
 }
@@ -2626,6 +2646,18 @@ void MainPageController::StartDiffusion(::xllama::ComputeJobAdmission::Handle pe
     std::thread([self, dispatcher, permit = std::move(permit)]() {
         try {
             winrt::init_apartment(); // MTA — ApplicationData + ORT DML
+            {
+                // Fork addition: free the resident chat model first. A 3 GB
+                // chat model plus the ~2.4 GB image weights exceed the Game
+                // memory budget ("bad allocation"); the next chat turn reloads.
+                auto& hub = ::xllama::session_hub();
+                std::lock_guard<std::mutex> lk(hub.mtx);
+                if (hub.session) {
+                    ::xllama::log_output("[xllama] diffuse: unloading chat model '" + hub.model +
+                                         "' to free memory\n");
+                    hub.reset_locked();
+                }
+            }
             ::xllama::bridge::run_diffuse();
         } catch (const std::exception& ex) {
             ::xllama::log_output(std::string("[xllama] diffuse thread: ") + ex.what() + "\n");
@@ -3765,6 +3797,29 @@ void MainPageController::OnRunClick(IInspectable const&, RoutedEventArgs const&)
     auto prompt = m_promptInput.Text();
     if (prompt.empty()) {
         SetStatus(L"Enter a prompt first");
+        return;
+    }
+    // Fork addition: "/web <question>" searches the web first (worker thread),
+    // then runs the turn with the numbered results in front of the question.
+    std::string web_query;
+    if (::xllama::parse_web_command(::xllama::wstring_to_utf8(std::wstring(prompt.c_str())),
+                                    &web_query)) {
+        if (m_is_running.load() || m_train_running.load() || m_diffuse_running.load()) {
+            SetStatus(L"Busy — wait for the current job to finish", StatusKind::Error);
+            return;
+        }
+        SetStatus(L"Searching the web...", StatusKind::Working);
+        m_runButton.IsEnabled(false);
+        auto self = shared_from_this();
+        auto dispatcher = m_root.Dispatcher();
+        std::thread([self, dispatcher, web_query]() {
+            winrt::init_apartment();
+            const std::string turn = ::xllama::uwp::web_search_prompt(web_query);
+            dispatcher.RunAsync(CoreDispatcherPriority::Normal, [self, turn]() {
+                self->m_runButton.IsEnabled(true);
+                self->StartInference(::xllama::utf8_to_wstring(turn));
+            });
+        }).detach();
         return;
     }
     StartInference(std::wstring(prompt.c_str()));

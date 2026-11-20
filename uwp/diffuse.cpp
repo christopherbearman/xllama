@@ -20,8 +20,15 @@
 // fp32 and input_ids as int32 or int64, matching what each session declares
 // (covers both a pure-fp16 export and a keep_io_types fp32-boundary one); outputs
 // are read as fp16 or fp32. Classifier-free guidance is NOT implemented — SD-Turbo
-// runs guidance-free (scale 0); SD1.x/LCM-class models would need CFG (two text
-// embeddings + guidance blend), out of scope for the console demo.
+// runs guidance-free (scale 0).
+//
+// LCM MODE (experimental): a Latent Consistency Model (e.g. LCM_Dreamshaper_v7,
+// SD1.5-class) is detected from models\<dir>\scheduler\scheduler_config.json
+// naming "LCMScheduler" (or a dir name containing "lcm"). LCM embeds guidance in
+// the UNet's timestep_cond input instead of CFG, so it needs one text embedding
+// and one UNet pass per step: LcmScheduler (lcm_scheduler.h) replaces Euler, the
+// prompt is padded with <|endoftext|> (SD1.x tokenizer), and
+// diffuse-guidance.txt sets the guidance scale (default 8, the model card's).
 //
 // Inputs (LocalState): prompt.txt, diffuse-model.txt (model dir name),
 // diffuse-steps.txt (default 1), diffuse-seed.txt (default 42);
@@ -48,6 +55,7 @@
     #include "xllama/diffusion/clip_tokenizer.h"
     #include "xllama/diffusion/euler_scheduler.h"
     #include "xllama/diffusion/half.h"
+    #include "xllama/diffusion/lcm_scheduler.h"
     #include "xllama/diffusion/png_writer.h"
     #include "xllama/path_utils.h"
     #include "xllama/platform.h"
@@ -55,6 +63,7 @@
 
     #include <algorithm>
     #include <array>
+    #include <cctype>
     #include <chrono>
     #include <cstdint>
     #include <cstdio>
@@ -228,8 +237,17 @@ void run_diffuse() {
         read_text_file("prompt.txt", "a red sports car on a mountain road at sunset");
     const int steps = read_int_file("diffuse-steps.txt", 1, 1, 50);
     const int seed = read_int_file("diffuse-seed.txt", 42, 0, 1'000'000'000);
-    log_output("[xllama] diffuse: model='" + dir + "' steps=" + std::to_string(steps) +
-               " seed=" + std::to_string(seed) + " prompt='" + prompt + "'\n");
+    const int guidance = read_int_file("diffuse-guidance.txt", 8, 1, 20);
+    const std::string sched_cfg =
+        read_text_file(("models\\" + dir + "\\scheduler\\scheduler_config.json").c_str(), "");
+    std::string dir_lower = dir;
+    std::transform(dir_lower.begin(), dir_lower.end(), dir_lower.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+    const bool is_lcm = sched_cfg.find("LCMScheduler") != std::string::npos ||
+                        dir_lower.find("lcm") != std::string::npos;
+    log_output("[xllama] diffuse: model='" + dir + "' steps=" + std::to_string(steps) + " seed=" +
+               std::to_string(seed) + (is_lcm ? " lcm guidance=" + std::to_string(guidance) : "") +
+               " prompt='" + prompt + "'\n");
 
     // Fresh run: stale completion marker and a leftover cancel flag from a
     // previous run must not leak into this one.
@@ -258,7 +276,7 @@ void run_diffuse() {
             merges = resolve_local_path("clip\\merges.txt");
         }
         auto tok = diffusion::ClipTokenizer::from_files(vocab, merges);
-        const std::vector<int> ids = tok.encode(prompt); // length 77
+        const std::vector<int> ids = tok.encode(prompt, /*pad_with_eos=*/is_lcm); // length 77
 
         // Sessions are created and DESTROYED per stage: the 3801 MB GPU budget
         // does not fit all three sets of weights (~2.4 GB) plus the VAE's
@@ -295,13 +313,22 @@ void run_diffuse() {
 
         // ---- Scheduler + init latent ---------------------------------------
         diffusion::EulerDiscreteScheduler sched;
+        diffusion::LcmScheduler lcm;
         sched.set_timesteps(steps);
+        lcm.set_timesteps(steps);
+        const std::vector<double>& tsteps = is_lcm ? lcm.timesteps() : sched.timesteps();
+        const double init_sigma = is_lcm ? lcm.init_noise_sigma() : sched.init_noise_sigma();
         const size_t latent_n = (size_t)kLatentC * kLatentHW * kLatentHW;
         std::vector<float> latent(latent_n);
         std::mt19937 rng((unsigned)seed);
         std::normal_distribution<float> gauss(0.0f, 1.0f);
         for (auto& v : latent)
-            v = gauss(rng) * (float)sched.init_noise_sigma();
+            v = gauss(rng) * (float)init_sigma;
+        // LCM guidance embedding (UNet timestep_cond [1,256]); constant per run.
+        const std::vector<float> w_emb =
+            is_lcm ? diffusion::LcmScheduler::guidance_embedding((double)guidance)
+                   : std::vector<float>{};
+        std::vector<float> fresh; // LCM per-step noise (reused)
 
         std::array<int64_t, 4> s_shape{1, kLatentC, kLatentHW, kLatentHW};
         std::array<int64_t, 1> t_shape{1};
@@ -332,10 +359,18 @@ void run_diffuse() {
             std::vector<float> scaled;        // reused across steps
             std::vector<uint16_t> scaled_f16; // reused when unet_fp16
             std::vector<float> noise;         // reused across steps
+            // LCM: timestep_cond fed as fp16 or fp32 per the session's declaration.
+            const bool wc_fp16 = is_lcm && input_type_by_name(unet, "timestep_cond") ==
+                                               ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16;
+            std::vector<float> wc_f32 = w_emb;
+            std::vector<uint16_t> wc_f16;
+            if (wc_fp16)
+                wc_f16 = to_half(w_emb);
+            std::array<int64_t, 2> wc_shape{1, (int64_t)w_emb.size()};
 
-            for (size_t s = 0; s < sched.timesteps().size(); ++s) {
+            for (size_t s = 0; s < tsteps.size(); ++s) {
                 const std::string step_label =
-                    std::to_string(s + 1) + "/" + std::to_string(sched.timesteps().size());
+                    std::to_string(s + 1) + "/" + std::to_string(tsteps.size());
                 if (cancel_requested()) {
                     log_output("[xllama] diffuse: cancelled at unet step " + step_label + "\n");
                     write_progress("cancelled");
@@ -344,7 +379,8 @@ void run_diffuse() {
                 write_progress("unet " + step_label);
                 // scale_model_input on a copy (UNet sees the scaled latent).
                 scaled = latent;
-                sched.scale_model_input(scaled);
+                if (!is_lcm)
+                    sched.scale_model_input(scaled); // LCM: identity
                 Ort::Value u_sample{nullptr};
                 if (unet_fp16) {
                     scaled_f16.resize(scaled.size());
@@ -364,7 +400,7 @@ void run_diffuse() {
                                                          ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16)
                               : Ort::Value::CreateTensor<float>(mem, hidden.data(), hidden.size(),
                                                                 h_shape.data(), h_shape.size());
-                const double ts_val = sched.timesteps()[s];
+                const double ts_val = tsteps[s];
                 int64_t ts_i64 = (int64_t)ts_val;
                 float ts_f32 = (float)ts_val;
                 uint16_t ts_f16 = diffusion::float_to_half(ts_f32);
@@ -380,16 +416,37 @@ void run_diffuse() {
                         Ort::Value::CreateTensor<int64_t>(mem, &ts_i64, 1, t_shape.data(), ts_rank);
                 }
 
-                Ort::Value u_ins[] = {std::move(u_sample), std::move(u_ts), std::move(u_hs)};
-                const char* u_in_names[] = {"sample", "timestep", "encoder_hidden_states"};
+                Ort::Value u_wc{nullptr};
+                if (is_lcm) {
+                    u_wc = wc_fp16
+                               ? Ort::Value::CreateTensor(mem, wc_f16.data(),
+                                                          wc_f16.size() * sizeof(uint16_t),
+                                                          wc_shape.data(), wc_shape.size(),
+                                                          ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16)
+                               : Ort::Value::CreateTensor<float>(mem, wc_f32.data(), wc_f32.size(),
+                                                                 wc_shape.data(), wc_shape.size());
+                }
+                Ort::Value u_ins[] = {std::move(u_sample), std::move(u_ts), std::move(u_hs),
+                                      std::move(u_wc)};
+                const char* u_in_names[] = {"sample", "timestep", "encoder_hidden_states",
+                                            "timestep_cond"};
                 const char* u_out_names[] = {"out_sample"};
+                const size_t n_in = is_lcm ? 4 : 3;
                 auto t_u0 = std::chrono::steady_clock::now();
                 auto u_out =
-                    unet.Run(Ort::RunOptions{nullptr}, u_in_names, u_ins, 3, u_out_names, 1);
+                    unet.Run(Ort::RunOptions{nullptr}, u_in_names, u_ins, n_in, u_out_names, 1);
                 unet_ms += ms_since(t_u0);
                 read_output_f32_into(u_out[0], noise); // epsilon [1,4,64,64]
 
-                sched.step(noise, latent); // latent <- previous sample
+                if (is_lcm) {
+                    fresh.resize(latent.size());
+                    if (!lcm.is_last_step())
+                        for (auto& v : fresh)
+                            v = gauss(rng);
+                    lcm.step(noise, latent, fresh); // latent <- previous sample
+                } else {
+                    sched.step(noise, latent); // latent <- previous sample
+                }
             }
         } // release UNet weights (~1.65 GB) before the VAE's 512x512 activations
 
@@ -438,8 +495,8 @@ void run_diffuse() {
         snprintf(lb, sizeof(lb),
                  "[xllama] diffuse: te %.0f ms | unet %.0f ms (%zu step, %.0f ms/step) | vae "
                  "%.0f ms | total %.0f ms | process_peak_ws_mb=%zu\n",
-                 te_ms, unet_ms, sched.timesteps().size(),
-                 unet_ms / (double)sched.timesteps().size(), vae_ms, total_ms, process_peak_ws_mb);
+                 te_ms, unet_ms, tsteps.size(), unet_ms / (double)tsteps.size(), vae_ms, total_ms,
+                 process_peak_ws_mb);
         log_output(lb);
 
         // Result CSV (+ .done marker), fetchable via Device Portal.
@@ -452,8 +509,8 @@ void run_diffuse() {
                   "date,process_peak_ws_mb\n",
                   fp);
             fprintf(fp, "%s,%d,%d,%.1f,%.1f,%.1f,%.1f,%.1f,%dx%d,%s,%zu\n", dir.c_str(), steps,
-                    seed, te_ms, unet_ms, unet_ms / (double)sched.timesteps().size(), vae_ms,
-                    total_ms, kImageHW, kImageHW, date_buf, process_peak_ws_mb);
+                    seed, te_ms, unet_ms, unet_ms / (double)tsteps.size(), vae_ms, total_ms,
+                    kImageHW, kImageHW, date_buf, process_peak_ws_mb);
             fclose(fp);
         }
         if (pf) {

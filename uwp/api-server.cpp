@@ -21,6 +21,7 @@
 
     #include "inference-bridge.h"
     #include "model-downloader.h"
+    #include "web-fetch.h"
     #include "xllama/api_activity.h"
     #include "xllama/api_connection.h"
     #include "xllama/api_policy.h"
@@ -44,6 +45,7 @@
     #include "xllama/tool_template.h"
     #include "xllama/tool_transcript.h"
     #include "xllama/utf8_utils.h"
+    #include "xllama/web_search.h"
 
     #include <algorithm>
     #include <cctype>
@@ -128,6 +130,105 @@ std::string read_local_text(const char* name) {
     while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' '))
         out.pop_back();
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// Fork addition: remote diagnostics (trusted LAN only, like the rest of the API).
+//   GET  /v1/debug/log     -> {"log": last ~400 lines of xllama.log}
+//   GET  /v1/debug/status  -> resident model, memory, image progress
+//   POST /v1/debug/unload  -> drop the resident chat model (frees RAM)
+// ---------------------------------------------------------------------------
+std::string json_string_value(const std::string& text) {
+    std::string safe;
+    safe.reserve(text.size());
+    for (unsigned char c : text) // keep it valid UTF-8 for to_hstring: ASCII only
+        safe.push_back((c < 0x80 && (c >= 0x20 || c == '\n' || c == '\t')) ? (char)c : '?');
+    return winrt::to_string(JsonValue::CreateStringValue(winrt::to_hstring(safe)).Stringify());
+}
+
+std::string debug_log_json() {
+    const std::string p = ::xllama::resolve_local_path("xllama.log");
+    std::string all;
+    FILE* f = _wfopen(winrt::to_hstring(p).c_str(), L"rb");
+    if (f) {
+        // Read at most the last 256 KB.
+        _fseeki64(f, 0, SEEK_END);
+        const long long size = _ftelli64(f);
+        const long long start = size > 262144 ? size - 262144 : 0;
+        _fseeki64(f, start, SEEK_SET);
+        char buf[8192];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+            all.append(buf, n);
+        fclose(f);
+    }
+    size_t pos = all.size();
+    int lines = 0;
+    while (pos > 0 && lines < 400) {
+        pos = all.rfind('\n', pos - 1);
+        if (pos == std::string::npos) {
+            pos = 0;
+            break;
+        }
+        ++lines;
+    }
+    return "{\"log\":" + json_string_value(all.substr(pos)) + "}";
+}
+
+std::string debug_status_json() {
+    auto& hub = ::xllama::session_hub();
+    std::string model = "(busy)";
+    {
+        std::unique_lock<std::mutex> lk(hub.mtx, std::try_to_lock);
+        if (lk.owns_lock())
+            model = hub.session ? hub.model : "";
+    }
+    unsigned long long limit_mb = 0, usage_mb = 0;
+    try {
+        limit_mb =
+            winrt::Windows::System::MemoryManager::AppMemoryUsageLimit() / (1024ull * 1024ull);
+        usage_mb = winrt::Windows::System::MemoryManager::AppMemoryUsage() / (1024ull * 1024ull);
+    } catch (...) {
+    }
+    return "{\"resident_model\":" + json_string_value(model) +
+           ",\"app_memory_limit_mb\":" + std::to_string(limit_mb) +
+           ",\"app_memory_usage_mb\":" + std::to_string(usage_mb) +
+           ",\"working_set_mb\":" + std::to_string(::xllama::working_set_mb()) +
+           ",\"peak_working_set_mb\":" + std::to_string(::xllama::peak_working_set_mb()) +
+           ",\"image_progress\":" + json_string_value(read_local_text("diffuse-progress.txt")) +
+           ",\"image_model\":" + json_string_value(read_local_text("diffuse-model.txt")) + "}";
+}
+
+// Fork addition: "/web <question>" as the last user message runs a web search
+// on the console and replaces that message with numbered results + question.
+// Runs before the compute lease so the fetch never holds the model.
+std::string apply_web_command(const std::string& body) {
+    try {
+        JsonObject root{nullptr};
+        if (!JsonObject::TryParse(winrt::to_hstring(body), root) || root == nullptr ||
+            !root.HasKey(L"messages"))
+            return body;
+        auto msgs = root.GetNamedArray(L"messages");
+        for (int i = (int)msgs.Size() - 1; i >= 0; --i) {
+            auto v = msgs.GetAt((uint32_t)i);
+            if (v.ValueType() != JsonValueType::Object)
+                continue;
+            auto m = v.GetObject();
+            if (m.GetNamedString(L"role", L"") != L"user")
+                continue;
+            if (!m.HasKey(L"content") ||
+                m.GetNamedValue(L"content").ValueType() != JsonValueType::String)
+                return body;
+            std::string q;
+            if (!::xllama::parse_web_command(winrt::to_string(m.GetNamedString(L"content")), &q))
+                return body;
+            m.SetNamedValue(L"content", JsonValue::CreateStringValue(winrt::to_hstring(
+                                            ::xllama::uwp::web_search_prompt(q))));
+            return winrt::to_string(root.Stringify());
+        }
+    } catch (...) {
+    }
+    return body;
 }
 
 // Xbox blocks binding ports in [57344, 65535] (traffic is silently dropped, per
@@ -1633,11 +1734,28 @@ std::string handle_images_locked(const std::string& body, const char*& status) {
         status = "400 Bad Request";
         return error_json("missing 'prompt'");
     }
+    // Model selection (experimental): an OpenAI-style "model" naming LCM /
+    // Dreamshaper picks the LocalState\models\lcm-dreamshaper-v7 tree (uploaded
+    // via Device Portal; not in the catalogue). Anything else keeps SD-Turbo.
+    std::string model_dir = "sd-turbo-fp16";
+    if (root.HasKey(L"model") &&
+        root.GetNamedValue(L"model").ValueType() == JsonValueType::String) {
+        std::string m = winrt::to_string(root.GetNamedString(L"model", L""));
+        std::transform(m.begin(), m.end(), m.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        if (m.find("lcm") != std::string::npos || m.find("dreamshaper") != std::string::npos)
+            model_dir = "lcm-dreamshaper-v7";
+    }
+    const bool lcm = model_dir != "sd-turbo-fp16";
     // Clamped, never rejected (UI Image dialog max is 4 steps); clamped on the
     // double, since casting an out-of-range double to int is undefined (F01).
-    int steps = 1;
+    // LCM defaults to its recommended 4 steps (SD-Turbo: 1).
+    int steps = lcm ? 4 : 1;
     if (root.HasKey(L"steps"))
-        steps = ::xllama::clamp_api_int(root.GetNamedNumber(L"steps", 1), 1, 4);
+        steps = ::xllama::clamp_api_int(root.GetNamedNumber(L"steps", 1), 1, lcm ? 8 : 4);
+    int guidance = 8; // LCM only (timestep_cond); model card default
+    if (root.HasKey(L"guidance_scale"))
+        guidance = ::xllama::clamp_api_int(root.GetNamedNumber(L"guidance_scale", 8), 1, 20);
     int seed = 42;
     if (root.HasKey(L"seed")) {
         const double raw = root.GetNamedNumber(L"seed", 42);
@@ -1657,11 +1775,34 @@ std::string handle_images_locked(const std::string& body, const char*& status) {
         write("prompt.txt", prompt);
         write("diffuse-steps.txt", std::to_string(steps));
         write("diffuse-seed.txt", std::to_string(seed));
-        write("diffuse-model.txt", "sd-turbo-fp16");
+        write("diffuse-model.txt", model_dir);
+        write("diffuse-guidance.txt", std::to_string(guidance));
         _wremove(
             ::xllama::utf8_to_wstring(::xllama::resolve_local_path("diffuse-cancel.flag")).c_str());
     }
 
+    // Fork addition: the LCM model is not auto-downloaded by the API.
+    {
+        const std::string unet =
+            ::xllama::resolve_local_path("models\\" + model_dir + "\\unet\\model.onnx");
+        if (GetFileAttributesW(::xllama::utf8_to_wstring(unet).c_str()) ==
+            INVALID_FILE_ATTRIBUTES) {
+            status = "409 Conflict";
+            return error_json("image model '" + model_dir +
+                              "' is not downloaded: generate one image with it from the "
+                              "Image dialog on the console first");
+        }
+    }
+    // Fork addition: free the resident chat model first (the caller holds the
+    // hub lock). Chat + image weights exceed the Game memory budget.
+    {
+        auto& hub = ::xllama::session_hub();
+        if (hub.session) {
+            ::xllama::log_output("[xllama] api images: unloading chat model '" + hub.model +
+                                 "' to free memory\n");
+            hub.reset_locked();
+        }
+    }
     ::xllama::bridge::run_diffuse();
 
     const std::string stage = read_local_text("diffuse-progress.txt");
@@ -1996,6 +2137,30 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
             return;
         }
 
+        // Fork addition: remote diagnostics.
+        if (req.method == "GET" && req.path == "/v1/debug/log") {
+            write_response(socket, "200 OK", debug_log_json());
+            return;
+        }
+        if (req.method == "GET" && req.path == "/v1/debug/status") {
+            write_response(socket, "200 OK", debug_status_json());
+            return;
+        }
+        if (req.method == "POST" && req.path == "/v1/debug/unload") {
+            auto compute_permit = acquire_compute_job_or_busy();
+            std::unique_lock<std::mutex> lk = acquire_hub_or_busy();
+            if (!compute_permit || !lk.owns_lock()) {
+                write_response(socket, ::xllama::kApiBusyStatus, error_json("busy"));
+                return;
+            }
+            auto& hub = ::xllama::session_hub();
+            const std::string was = hub.session ? hub.model : "";
+            hub.reset_locked();
+            ::xllama::log_output("[xllama] api: unload requested (was '" + was + "')\n");
+            write_response(socket, "200 OK", "{\"unloaded\":" + json_string_value(was) + "}");
+            return;
+        }
+
         // Model discovery: clients probe /v1/models (OpenAI SDK) and /api/tags
         // (Ollama-aware) before completing.
         if (req.method == "GET" && req.path == "/v1/models") {
@@ -2021,6 +2186,7 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
                 return;
             }
             const bool stream = stream_request == StreamRequest::Yes;
+            const std::string chat_body = apply_web_command(req.body);
             auto compute_permit = acquire_compute_job_or_busy();
             if (!compute_permit) {
                 activity().busy();
@@ -2055,7 +2221,7 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
             const char* status = "200 OK";
             std::string json;
             try {
-                json = handle_chat_locked(req.body, status, ticket, socket, stream);
+                json = handle_chat_locked(chat_body, status, ticket, socket, stream);
             } catch (...) {
                 status = "400 Bad Request";
                 json = error_json("malformed request body");

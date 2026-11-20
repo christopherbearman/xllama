@@ -316,6 +316,22 @@
       ]
     },
     {
+      "_comment": "Qwen3.5-4B Q4_K_M (Apache-2.0, unsloth, text-only file; vision mmproj not used). Fork addition 2026-11-20 as the best all-round coding model that fits the console budget (vendor LiveCodeBench v6 55.8). Arch qwen35: ChatML + model_is_qwen3 no-think prefill (id keeps 'qwen3', no 'thinking'); imrope so can_shift=0 (fail-fast at a full context). Hybrid gated-delta-net + 1-in-4 full attention keeps KV small, so n_ctx 8192 for pasting source. Not console-benchmarked by upstream.",
+      "name": "qwen35-4b",
+      "display": "Qwen3.5 4B (GGUF · CPU · coding · best quality)",
+      "kind": "gguf",
+      "role": "coding",
+      "n_ctx": 8192,
+      "hf_base_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main",
+      "files": [
+        {
+          "filename": "Qwen3.5-4B-Q4_K_M.gguf",
+          "approx_bytes": 2740937888,
+          "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4"
+        }
+      ]
+    },
+    {
       "_comment": "Phi-4-mini-instruct Q4_K_M (3.8B, MIT) — unsloth GGUF. Series S T3 PASS 2026-09-30 (#268): 11.2 tok/s decode, 33.1 prefill, 2765 MB peak, H9 6/8 vs llama32-3b 5/8 (bench/results/2026-09-30-catalogue-gates.csv). >2GB is fine on GGUF but must download straight from HF (GitHub release asset cap). Phi-3 template via chat_format_for (id must keep 'phi' and avoid 'gemma'/'llama'). kind:gguf, CPU-only, KV-reuse, routing disabled. n_ctx 4096 (console 1.6.0.1163, 2026-10-12): 3528-token prompt peak WorkingSetSize 3096 MB vs 2838 MB at 2048 (1515 tok), working set after context alloc 3038 MB; needle at 3547 tokens correct; agent-runtime 50-case eval 48/50 at both n_ctx. Prefill ~28 tok/s, so a full window costs ~2 min before the first token.",
       "name": "phi4-mini",
       "display": "Phi-4 mini (GGUF · CPU)",
@@ -447,6 +463,45 @@
           "remote": "sd-turbo-fp16_tokenizer_merges.txt",
           "approx_bytes": 524619,
           "sha256": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a"
+        }
+      ]
+    },
+    {
+      "_comment": "Fork addition 2026-11-20 (experimental): LCM_Dreamshaper_v7 (MIT, SimianLuo) as a DirectML-Olive fp16 ONNX export by softwareweaver. SD1.5-class LCM: uwp/diffuse.cpp detects LCMScheduler in scheduler/scheduler_config.json and feeds timestep_cond (guidance embedding) with lcm_scheduler.h, 4 steps. UNet 1.72 GB single file (< 2 GB, no external data). Uses com.microsoft GroupNorm/MultiHeadAttention/Gelu (DML EP). Tokenizer files are byte-identical to sd-turbo-fp16's.",
+      "name": "lcm-dreamshaper-v7",
+      "display": "LCM DreamShaper v7 (image, GPU fp16)",
+      "kind": "diffusion",
+      "hf_base_url": "https://huggingface.co/softwareweaver/LCM_Dreamshaper_v7_Olive_Onnx/resolve/main",
+      "files": [
+        {
+          "filename": "scheduler/scheduler_config.json",
+          "approx_bytes": 562,
+          "sha256": "a77c4528b35ce85b2ccc82f18310cb572aac7f8ff3b3b669ad5176f24dab876d"
+        },
+        {
+          "filename": "tokenizer/vocab.json",
+          "approx_bytes": 1059962,
+          "sha256": "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349"
+        },
+        {
+          "filename": "tokenizer/merges.txt",
+          "approx_bytes": 524619,
+          "sha256": "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a"
+        },
+        {
+          "filename": "text_encoder/model.onnx",
+          "approx_bytes": 246480937,
+          "sha256": "c2ab90bfc60c33ae8bb64c49710a2add6f2e89145b7651f701e18de0ad42cb06"
+        },
+        {
+          "filename": "vae_decoder/model.onnx",
+          "approx_bytes": 99039201,
+          "sha256": "0a3cc8fb9cb472a6a50ceacafb56cfd5b39c1557a8befd1dbfb6c365eec85e86"
+        },
+        {
+          "filename": "unet/model.onnx",
+          "approx_bytes": 1719658983,
+          "sha256": "1b8ddc68aae1cd332608f829fb5c399f70808cf95e048812bdf37a58d345fcea"
         }
       ]
     },
