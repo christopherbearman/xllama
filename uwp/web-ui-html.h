@@ -92,6 +92,8 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
 .note ol{margin:6px 0 0 18px}
 .opt{display:none;align-items:center;gap:5px;font-size:12px;color:var(--muted);margin-left:6px;cursor:pointer}
 #modes.build .opt{display:flex}
+.opt-img{display:none;align-items:center;gap:5px;font-size:12px;color:var(--muted);margin-left:6px;cursor:pointer}
+#modes.image .opt-img{display:flex}
 #modes{flex-wrap:wrap;align-items:center}
 .typing::after{content:"▍";animation:b 1s steps(1) infinite;color:var(--accent)}
 @keyframes b{50%{opacity:0}}
@@ -169,6 +171,7 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
       <button class="chip" data-mode="web">🌐 Web search</button>
       <button class="chip" data-mode="image">🖼 Image</button>
       <button class="chip" data-mode="build" title="Websites and drawings: coding rules, thinking first, automatic check">🛠 Build</button>
+      <label class="opt-img" title="Queef thinks about your description and writes a detailed picture prompt first (slower, better pictures)"><input type="checkbox" id="o-ithink"> 🧠 Think up a better prompt first</label>
       <label class="opt" title="Let the model plan before writing (slower, better layouts)"><input type="checkbox" id="o-think"> 🧠 Think first</label>
       <label class="opt" title="Open the page in a hidden browser, look for problems and ask for fixes"><input type="checkbox" id="o-check"> 🔍 Auto-check &amp; fix</label>
     </div>
@@ -187,11 +190,11 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
     <div class="field"><label>System prompt (instructions for every chat)</label><textarea id="s-system"></textarea>
       <div class="r" style="margin-top:6px"><button id="s-system-reset">Reset to default</button></div></div>
     <div class="field"><label>Creativity (temperature)</label>
-      <div class="r"><input type="range" id="s-temp" min="0" max="1.5" step="0.1" style="flex:1"><b id="s-temp-v"></b></div>
+      <div class="r"><input type="range" id="s-temp" min="0" max="1.5" step="0.1" style="fle)XUI"
+    R"XUI(x:1"><b id="s-temp-v"></b></div>
       <div class="small">0.2–0.4 for code; higher for creative writing.</div></div>
     <div class="field"><label>Max reply length (tokens)</label><input type="number" id="s-max" min="64" max="8192" step="64">
-      <div class="r" style="margin-top:8px"><label style="margin:0;display:flex;gap:8px;align-items:center;color:var(--text)"><inp)XUI"
-    R"XUI(ut type="checkbox" id="s-auto"> Auto-continue replies that hit the limit (up to 4 times)</label></div></div>
+      <div class="r" style="margin-top:8px"><label style="margin:0;display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="s-auto"> Auto-continue replies that hit the limit (up to 4 times)</label></div></div>
     <div class="field"><label>Download a model to the Xbox</label>
       <div class="r"><select id="s-pull">
         <option value="qwen35-4b">Qwen3.5 4B — best coding (2.7 GB)</option>
@@ -232,9 +235,10 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
 };
-let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "", autoContinue: true, think: true, autoCheck: true }, LS.get("xa.settings", {}));
+let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "", autoContinue: true, think: true, autoCheck: true, imageThink: false }, LS.get("xa.settings", {}));
 const MAX_AUTO_CONTINUE = 4;
 const MAX_FIX_ROUNDS = 2;
+const IMAGE_PROMPT_SYSTEM = "You write prompts for a Stable Diffusion image model (DreamShaper). Turn the user's description into ONE prompt of at most 60 words: the main subject first, then setting, composition and camera angle, lighting, colours, mood and art style, as comma-separated phrases. Keep everything the user asked for. Reply with the prompt only: no quotes, no explanation.";
 const BUILD_SYSTEM = `You are an expert front-end developer. Reply with ONE complete, self-contained HTML file in a single \`\`\`html code block (CSS in <style>, JavaScript in <script>), then at most two sentences of explanation.
 Rules:
 - Pictures, illustrations, icons, clocks, scenes and diagrams: draw them with inline SVG using a viewBox (for example viewBox="0 0 800 600"). Place every shape with explicit coordinates. Never build pictures out of absolutely positioned divs.
@@ -329,7 +333,8 @@ function xaInject(CHECK, TOKEN) {
       var rep = [];
       items.forEach(function (it) {
         var el = it.el; if (rep.some(function (p) { return p.contains(el); })) return;
-        var r = el.getBoundingClientRect(), top = r.top + scrollY, left = r.left + scrollX, right = left + r.width, bottom = top + r.height;
+        var r = el.getBoundingClientRect(), top = r.top + scrollY, left = r.left + scrollX, right = left + r.width, bottom)XUI"
+    R"XUI( = top + r.height;
         var oL = Math.max(0, -left), oT = Math.max(0, -top), oR = hidX ? Math.max(0, right - W) : 0, oB = hidY ? Math.max(0, bottom - H) : 0;
         var vw = Math.max(0, r.width - oL - oR), vh = Math.max(0, r.height - oT - oB), frac = 1 - (vw * vh) / (r.width * r.height);
         if (frac > 0.15 && !clipper(el)) {
@@ -339,8 +344,7 @@ function xaInject(CHECK, TOKEN) {
         }
       });
       var docH = Math.max(de.scrollHeight, b.scrollHeight), checked = new Set(), sy0 = scrollY;
-    )XUI"
-    R"XUI(  for (var s = 0; s < 6; s++) {
+      for (var s = 0; s < 6; s++) {
         var y = s * H * 0.8; if (s && y >= docH - H * 0.2) break;
         window.scrollTo({ top: y, left: 0, behavior: "instant" });
         items.forEach(function (it) {
@@ -497,7 +501,8 @@ function saveConvs() {
   // Storage full (images are large): drop embedded images from older chats.
   for (let i = convs.length - 1; i >= 0; i--) {
     for (const m of convs[i].messages) m.content = stripImages(m.content);
-    if (LS.set("xa.convs", convs)) { toast("Storage full: older pictures were removed from saved chats"); return; }
+    if (LS.set("xa.convs", convs)) { toast("Storage full: older pictu)XUI"
+    R"XUI(res were removed from saved chats"); return; }
   }
 }
 function stripImages(t) { return answerOf(t || "").replace(/!\[([^\]\n]*)\]\(data:[^)]*\)/g, "[image]"); }
@@ -513,8 +518,7 @@ function inline(t) {
   t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   return t;
 }
-function blocks(t)XUI"
-    R"XUI(ext) {
+function blocks(text) {
   const out = []; const lines = text.split("\n"); let list = null; let para = [];
   const flushP = () => { if (para.length) { out.push("<p>" + para.map(inline).join("<br>") + "</p>"); para = []; } };
   const flushL = () => { if (list) { out.push(`<${list.t}>` + list.items.map(i => "<li>" + inline(i) + "</li>").join("") + `</${list.t}>`); list = null; } };
@@ -648,6 +652,18 @@ async function send(textOverride) {
   const history = current.messages.slice(0, -1).filter(m => !m.error && !(m.auto && !m.content)).map(m => ({ role: m.role, content: m.role === "user" ? unBuild(m.content) : stripImages(m.content) }));
   const isImage = /^\s*\/(image|img)\s/i.test(text);
   const isWeb = /^\s*\/(web|search)\s/i.test(text);
+  if (isImage && settings.imageThink) {
+    const desc = text.replace(/^\s*\/(image|img)\s+/i, "");
+    reply.model = model;
+    await streamInto(reply, [{ role: "user", content: desc }], model, "Thinking up the picture", false, { think: true, system: IMAGE_PROMPT_SYSTEM, maxTokens: 1500, noAuto: true });
+    if (reply.error || reply.stopped) return;
+    const t = splitThink(reply.content);
+    const prompt = t.answer.replace(/```[\s\S]*?```/g, "").replace(/^\s*(prompt\s*:)?\s*/i, "").split("\n").map(x => x.trim()).filter(Boolean)[0]?.replace(/^["'*]+|["'*]+$/g, "") || desc;
+    reply.content = (t.plan !== null ? "<think>\n" + t.plan + "\n</think>\n\n" : "") + "**Picture prompt:** " + prompt + "\n\n";
+    reply.stats = "";
+    await streamInto(reply, [{ role: "user", content: "/image " + prompt }], model, "Making the picture", true, { append: true });
+    return;
+  }
   await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", isImage, { think: build && settings.think });
 }
 
@@ -679,15 +695,16 @@ async function continueReply(auto) {
 async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   reqHist.set(reply, opt.keepHist || history);
   const body = {
-    model, stream: true, temperature: settings.temperature, max_tokens: settings.max_tokens,
-    messages: [{ role: "system", content: reply.build ? BUILD_SYSTEM : (settings.system || DEFAULT_SYSTEM) }, ...history]
+    model, stream: true, temperature: settings.temperature, max_tokens: opt.maxTokens || settings.max_tokens,
+    messages: [{ role: "system", content: opt.system || (reply.build ? BUILD_SYSTEM : (settings.system || DEFAULT_SYSTEM)) }, ...history]
   };
   if (opt.think) body.think = true;
   setBusy(true);
   liveStart(waitLabel, opt.think);
   setLiveStatus("");
   const t0 = performance.now(); let firstTok = 0; let chunks = 0;
-  const base = opt.append ? reply.content : "";
+  c)XUI"
+    R"XUI(onst base = opt.append ? reply.content : "";
   let added = "";
   reply.stopped = false;
   aborter = new AbortController();
@@ -717,8 +734,7 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
             if (piece !== "<think>\n") { live.toks++; live.chars += piece.length; }
             let shown = added;
             if (opt.fenceOpen) shown = shown.replace(/^\s*```[\w+#.-]*[ \t]*\n?/, m => (m.includes("\n") || shown.length > m.length) ? "" : m);
-            reply.content = )XUI"
-    R"XUI(base + shown;
+            reply.content = base + shown;
             const th = splitThink(reply.content);
             const stage = th.open ? "Thinking it through" : opt.append ? (waitLabel === "Continuing" ? "Continuing" : "Writing") : "Writing";
             if (stage !== live.stage) liveSet(stage, th.open ? "pulse" : "");
@@ -739,6 +755,7 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
     setBusy(false); aborter = null; liveStop();
     current.updated = Date.now(); saveConvs(); renderConvList(); renderMsgs(); poll();
   }
+  if (opt.noAuto) return;
   if (reply.finish === "length" && !reply.error && settings.autoContinue && (reply.autoCount || 0) < MAX_AUTO_CONTINUE) {
     liveStart("Hit the length limit, continuing automatically"); liveSet("Hit the length limit, continuing automatically", "pulse");
     setTimeout(() => continueReply(true), 700);
@@ -829,6 +846,7 @@ document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
   document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
   $("#input").placeholder = mode === "web" ? "Ask something to look up on the web…" : mode === "image" ? "Describe the picture…" : mode === "build" ? "Describe the page or drawing to build…" : "Message the Xbox…";
   $("#modes").classList.toggle("build", mode === "build");
+  $("#modes").classList.toggle("image", mode === "image");
   $("#input").focus();
 });
 $("#newchat").onclick = () => { newConv(); closeSide(); };
@@ -859,7 +877,8 @@ async function poll() {
     $("#st-mem").textContent = `${(s.app_memory_usage_mb / 1024).toFixed(1)} / ${(s.app_memory_limit_mb / 1024).toFixed(1)} GB`;
     $("#st-web").textContent = s.web_search_provider || "–";
     $("#st-ver").textContent = s.version || "–";
-    if (s.app_memory_limit_mb < 2048 && !poll.warned) { poll.warned = true; toast("xllama isn't in Game mode: big models won't load. Dev Home → xllama → View details → App type: Game"); }
+    if (s.app_memory_limit_)XUI"
+    R"XUI(mb < 2048 && !poll.warned) { poll.warned = true; toast("xllama isn't in Game mode: big models won't load. Dev Home → xllama → View details → App type: Game"); }
   } catch {
     $("#banner").style.display = "block"; $("#dot").style.background = "var(--bad)"; $("#st-state").textContent = "offline";
   }
@@ -876,11 +895,12 @@ async function loadLogs() { $("#logbox").textContent = "Loading…"; try { const
 $("#b-settings").onclick = () => {
   $("#s-system").value = settings.system; $("#s-temp").value = settings.temperature; $("#s-temp-v").textContent = settings.temperature; $("#s-max").value = settings.max_tokens; $("#s-auto").checked = settings.autoContinue !== false; show("#m-settings");
 };
-$("#s-system").oninput = () => { settings.system = $("#s-system").value; LS)XUI"
-    R"XUI(.set("xa.settings", settings); };
+$("#s-system").oninput = () => { settings.system = $("#s-system").value; LS.set("xa.settings", settings); };
 $("#s-system-reset").onclick = () => { settings.system = DEFAULT_SYSTEM; $("#s-system").value = DEFAULT_SYSTEM; LS.set("xa.settings", settings); };
 $("#s-temp").oninput = () => { settings.temperature = +$("#s-temp").value; $("#s-temp-v").textContent = settings.temperature; LS.set("xa.settings", settings); };
 $("#o-think").checked = settings.think !== false; $("#o-check").checked = settings.autoCheck !== false;
+$("#o-ithink").checked = !!settings.imageThink;
+$("#o-ithink").onchange = () => { settings.imageThink = $("#o-ithink").checked; LS.set("xa.settings", settings); };
 $("#o-think").onchange = () => { settings.think = $("#o-think").checked; LS.set("xa.settings", settings); };
 $("#o-check").onchange = () => { settings.autoCheck = $("#o-check").checked; LS.set("xa.settings", settings); };
 $("#s-auto").onchange = () => { settings.autoContinue = $("#s-auto").checked; LS.set("xa.settings", settings); };

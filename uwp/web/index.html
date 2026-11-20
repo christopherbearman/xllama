@@ -84,6 +84,8 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
 .note ol{margin:6px 0 0 18px}
 .opt{display:none;align-items:center;gap:5px;font-size:12px;color:var(--muted);margin-left:6px;cursor:pointer}
 #modes.build .opt{display:flex}
+.opt-img{display:none;align-items:center;gap:5px;font-size:12px;color:var(--muted);margin-left:6px;cursor:pointer}
+#modes.image .opt-img{display:flex}
 #modes{flex-wrap:wrap;align-items:center}
 .typing::after{content:"▍";animation:b 1s steps(1) infinite;color:var(--accent)}
 @keyframes b{50%{opacity:0}}
@@ -161,6 +163,7 @@ details.think div{margin-top:6px;white-space:normal;max-height:320px;overflow:au
       <button class="chip" data-mode="web">🌐 Web search</button>
       <button class="chip" data-mode="image">🖼 Image</button>
       <button class="chip" data-mode="build" title="Websites and drawings: coding rules, thinking first, automatic check">🛠 Build</button>
+      <label class="opt-img" title="Queef thinks about your description and writes a detailed picture prompt first (slower, better pictures)"><input type="checkbox" id="o-ithink"> 🧠 Think up a better prompt first</label>
       <label class="opt" title="Let the model plan before writing (slower, better layouts)"><input type="checkbox" id="o-think"> 🧠 Think first</label>
       <label class="opt" title="Open the page in a hidden browser, look for problems and ask for fixes"><input type="checkbox" id="o-check"> 🔍 Auto-check &amp; fix</label>
     </div>
@@ -223,9 +226,10 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } }
 };
-let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "", autoContinue: true, think: true, autoCheck: true }, LS.get("xa.settings", {}));
+let settings = Object.assign({ system: DEFAULT_SYSTEM, temperature: 0.3, max_tokens: 2048, model: "", autoContinue: true, think: true, autoCheck: true, imageThink: false }, LS.get("xa.settings", {}));
 const MAX_AUTO_CONTINUE = 4;
 const MAX_FIX_ROUNDS = 2;
+const IMAGE_PROMPT_SYSTEM = "You write prompts for a Stable Diffusion image model (DreamShaper). Turn the user's description into ONE prompt of at most 60 words: the main subject first, then setting, composition and camera angle, lighting, colours, mood and art style, as comma-separated phrases. Keep everything the user asked for. Reply with the prompt only: no quotes, no explanation.";
 const BUILD_SYSTEM = `You are an expert front-end developer. Reply with ONE complete, self-contained HTML file in a single \`\`\`html code block (CSS in <style>, JavaScript in <script>), then at most two sentences of explanation.
 Rules:
 - Pictures, illustrations, icons, clocks, scenes and diagrams: draw them with inline SVG using a viewBox (for example viewBox="0 0 800 600"). Place every shape with explicit coordinates. Never build pictures out of absolutely positioned divs.
@@ -637,6 +641,18 @@ async function send(textOverride) {
   const history = current.messages.slice(0, -1).filter(m => !m.error && !(m.auto && !m.content)).map(m => ({ role: m.role, content: m.role === "user" ? unBuild(m.content) : stripImages(m.content) }));
   const isImage = /^\s*\/(image|img)\s/i.test(text);
   const isWeb = /^\s*\/(web|search)\s/i.test(text);
+  if (isImage && settings.imageThink) {
+    const desc = text.replace(/^\s*\/(image|img)\s+/i, "");
+    reply.model = model;
+    await streamInto(reply, [{ role: "user", content: desc }], model, "Thinking up the picture", false, { think: true, system: IMAGE_PROMPT_SYSTEM, maxTokens: 1500, noAuto: true });
+    if (reply.error || reply.stopped) return;
+    const t = splitThink(reply.content);
+    const prompt = t.answer.replace(/```[\s\S]*?```/g, "").replace(/^\s*(prompt\s*:)?\s*/i, "").split("\n").map(x => x.trim()).filter(Boolean)[0]?.replace(/^["'*]+|["'*]+$/g, "") || desc;
+    reply.content = (t.plan !== null ? "<think>\n" + t.plan + "\n</think>\n\n" : "") + "**Picture prompt:** " + prompt + "\n\n";
+    reply.stats = "";
+    await streamInto(reply, [{ role: "user", content: "/image " + prompt }], model, "Making the picture", true, { append: true });
+    return;
+  }
   await streamInto(reply, history, model, isImage ? "Making the picture" : isWeb ? "Searching the web" : "Waiting for the Xbox", isImage, { think: build && settings.think });
 }
 
@@ -668,8 +684,8 @@ async function continueReply(auto) {
 async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   reqHist.set(reply, opt.keepHist || history);
   const body = {
-    model, stream: true, temperature: settings.temperature, max_tokens: settings.max_tokens,
-    messages: [{ role: "system", content: reply.build ? BUILD_SYSTEM : (settings.system || DEFAULT_SYSTEM) }, ...history]
+    model, stream: true, temperature: settings.temperature, max_tokens: opt.maxTokens || settings.max_tokens,
+    messages: [{ role: "system", content: opt.system || (reply.build ? BUILD_SYSTEM : (settings.system || DEFAULT_SYSTEM)) }, ...history]
   };
   if (opt.think) body.think = true;
   setBusy(true);
@@ -727,6 +743,7 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
     setBusy(false); aborter = null; liveStop();
     current.updated = Date.now(); saveConvs(); renderConvList(); renderMsgs(); poll();
   }
+  if (opt.noAuto) return;
   if (reply.finish === "length" && !reply.error && settings.autoContinue && (reply.autoCount || 0) < MAX_AUTO_CONTINUE) {
     liveStart("Hit the length limit, continuing automatically"); liveSet("Hit the length limit, continuing automatically", "pulse");
     setTimeout(() => continueReply(true), 700);
@@ -817,6 +834,7 @@ document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
   document.querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === c));
   $("#input").placeholder = mode === "web" ? "Ask something to look up on the web…" : mode === "image" ? "Describe the picture…" : mode === "build" ? "Describe the page or drawing to build…" : "Message the Xbox…";
   $("#modes").classList.toggle("build", mode === "build");
+  $("#modes").classList.toggle("image", mode === "image");
   $("#input").focus();
 });
 $("#newchat").onclick = () => { newConv(); closeSide(); };
@@ -868,6 +886,8 @@ $("#s-system").oninput = () => { settings.system = $("#s-system").value; LS.set(
 $("#s-system-reset").onclick = () => { settings.system = DEFAULT_SYSTEM; $("#s-system").value = DEFAULT_SYSTEM; LS.set("xa.settings", settings); };
 $("#s-temp").oninput = () => { settings.temperature = +$("#s-temp").value; $("#s-temp-v").textContent = settings.temperature; LS.set("xa.settings", settings); };
 $("#o-think").checked = settings.think !== false; $("#o-check").checked = settings.autoCheck !== false;
+$("#o-ithink").checked = !!settings.imageThink;
+$("#o-ithink").onchange = () => { settings.imageThink = $("#o-ithink").checked; LS.set("xa.settings", settings); };
 $("#o-think").onchange = () => { settings.think = $("#o-think").checked; LS.set("xa.settings", settings); };
 $("#o-check").onchange = () => { settings.autoCheck = $("#o-check").checked; LS.set("xa.settings", settings); };
 $("#s-auto").onchange = () => { settings.autoContinue = $("#s-auto").checked; LS.set("xa.settings", settings); };
