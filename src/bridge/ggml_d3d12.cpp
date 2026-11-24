@@ -1531,7 +1531,7 @@ D3d12FlashAttnDesc fa_desc_of(const ggml_tensor* node) {
     d.ne3 = std::max({q->ne[3], k->ne[3], v->ne[3], node->ne[3], m ? m->ne[3] : 1});
     d.mask_ne2 = m ? m->ne[2] : 1;
     d.mask_ne1 = m ? m->ne[1] : d.n_q;
-    std::memcpy(&d.max_bias, static_cast<const float*>(node->op_params) + 1, sizeof(float));
+    std::memcpy(&d.max_bias, reinterpret_cast<const float*>(node->op_params) + 1, sizeof(float));
     d.rows_contiguous = q->nb[0] == ggml_type_size(q->type) &&
                         k->nb[0] == ggml_type_size(k->type) && v->nb[0] == ggml_type_size(v->type);
     d.dst_contiguous = ggml_is_contiguous(node);
@@ -1596,8 +1596,8 @@ D3d12FaParams fa_params_of(const ggml_tensor* node) {
     p.has_sinks = node->src[4] ? 1u : 0u;
     p.kv_q8 = k->type == GGML_TYPE_Q8_0 ? 1u : 0u;
     float scale = 1.f, softcap = 0.f;
-    std::memcpy(&scale, static_cast<const float*>(node->op_params) + 0, sizeof(float));
-    std::memcpy(&softcap, static_cast<const float*>(node->op_params) + 2, sizeof(float));
+    std::memcpy(&scale, reinterpret_cast<const float*>(node->op_params) + 0, sizeof(float));
+    std::memcpy(&softcap, reinterpret_cast<const float*>(node->op_params) + 2, sizeof(float));
     d3d12_fa_scales(scale, softcap, &p.scale_bits, &p.softcap_bits);
     return p;
 }
