@@ -65,6 +65,14 @@ def main() -> None:
                 emit(obj.read_bytes(), gen / f"ggml_d3d12_mmv_{name}_t{w}_dxil.h",
                      f"shaders/ggml_d3d12_mmv_{name}.hlsl -D NUM_THREADS={w}",
                      f"kGgmlD3d12Mmv{camel}T{w}Dxil")
+    # Flash attention (one blob, 64 threads fixed in the shader).
+    src = ROOT / "shaders" / "ggml_d3d12_fa.hlsl"
+    with tempfile.TemporaryDirectory() as td:
+        obj = Path(td) / "out.dxil"
+        subprocess.run([dxc, "-T", "cs_6_4", "-E", "CSMain", "-I", str(ROOT / "shaders"),
+                        "-Fo", str(obj), str(src)], check=True)
+        emit(obj.read_bytes(), gen / "ggml_d3d12_fa_dxil.h", "shaders/ggml_d3d12_fa.hlsl",
+             "kGgmlD3d12FaDxil")
     for name, camel in TILE_TARGETS:
         src = ROOT / "shaders" / f"ggml_d3d12_mmt_{name}.hlsl"
         for w in WIDTHS:

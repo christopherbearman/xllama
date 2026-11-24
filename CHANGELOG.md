@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Attention on the GPU (fork, D3D12).** `FLASH_ATTN_EXT` — the
+  full-attention layers' look-back over the KV cache — runs as a D3D12 kernel
+  (`shaders/ggml_d3d12_fa.hlsl`) for F16 and Q8_0 caches, instead of on the
+  CPU, where it was 61% of a 6,300-token prefill and 52% of each decoded token
+  at that length (Series X op profile). The first use checks the kernel
+  against its host emulation (`d3d12_fa_emulate`, itself tested against
+  ggml-cpu) and leaves attention on the CPU if they disagree;
+  `LocalState\d3d12-fa-off.txt` turns it off.
+- **Threaded CPU `CONCAT` (patch 0002).** The delta-net conv concat ran on one
+  thread (14% of the same prefill); rows are now split across threads.
+
 - **SSE for LAN tool proposals.** Requests with `stream: true` receive the
   parsed assistant output and indexed tool calls as SSE, followed by the
   finish reason and usage. The tool path emits its first event after parsing

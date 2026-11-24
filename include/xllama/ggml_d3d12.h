@@ -122,6 +122,56 @@ void d3d12_get_rows_emulate(ggml_type t, const std::uint8_t* w, std::size_t w_ro
                             const std::int32_t* ids, int n_ids, int k, float* y,
                             std::size_t y_stride);
 
+// --- FLASH_ATTN_EXT (fork) ---
+// shaders/ggml_d3d12_fa.hlsl: one group of kD3d12FaThreads per (query, head),
+// keys in blocks of kD3d12FaThreads, online softmax per block.
+inline constexpr int kD3d12FaThreads = 64;
+inline constexpr int kD3d12FaMaxD = 256;
+
+struct D3d12FlashAttnDesc {
+    ggml_type q_type = GGML_TYPE_F32;
+    ggml_type k_type = GGML_TYPE_F16;
+    ggml_type v_type = GGML_TYPE_F16;
+    ggml_type mask_type = GGML_TYPE_F16; // GGML_TYPE_COUNT = no mask
+    ggml_type dst_type = GGML_TYPE_F32;
+    std::int64_t dk = 0, dv = 0;
+    std::int64_t n_q = 0, n_head = 0, n_head_kv = 0, n_kv = 0;
+    std::int64_t ne3 = 1;      // largest ne[3] over q, k, v, mask, dst
+    std::int64_t mask_ne2 = 1; // mask planes; n_head % mask_ne2 == 0
+    std::int64_t mask_ne1 = 0; // mask rows, >= n_q
+    float max_bias = 0.f;
+    bool rows_contiguous = true; // nb[0] == element size for q, k, v
+    bool dst_contiguous = true;
+    bool mask_contiguous = true;
+    bool strides_even = true;    // every K/V/mask byte stride and offset is even
+    bool strides_fit_u32 = true; // all byte offsets the kernel forms fit 32 bits
+};
+
+bool d3d12_fa_supported(const D3d12FlashAttnDesc& d);
+
+// The kernel's root constants (FaParams in the HLSL), in order.
+struct D3d12FaParams {
+    std::uint32_t n_kv = 0, d = 0, n_q = 0, n_head = 0;
+    std::uint32_t gqa = 1, nbq1 = 0, nbq2 = 0, nbk1 = 0;
+    std::uint32_t nbk2 = 0, nbv1 = 0, nbv2 = 0, nbm1 = 0;
+    std::uint32_t nbm2 = 0, mask_ne2 = 1, scale_bits = 0, softcap_bits = 0;
+    std::uint32_t has_mask = 0, has_sinks = 0, kv_q8 = 0, q_off = 0;
+    std::uint32_t k_off = 0, v_off = 0, m_off = 0, pad0 = 0;
+};
+static_assert(sizeof(D3d12FaParams) == 24 * 4, "FaParams is 24 root constants");
+
+// scale / softcap from FLASH_ATTN_EXT op_params as the kernel wants them
+// (scale divided by softcap when softcap is set, as ggml-cpu does).
+void d3d12_fa_scales(float scale, float logit_softcap, std::uint32_t* scale_bits,
+                     std::uint32_t* softcap_bits);
+
+// Host emulation of shaders/ggml_d3d12_fa.hlsl, block for block. q/k/v/mask
+// are the bytes the root UAVs address (each view starts p.*_off bytes in);
+// out is [d, n_head, n_q] contiguous.
+void d3d12_fa_emulate(const D3d12FaParams& p, const std::uint8_t* q, const std::uint8_t* k,
+                      const std::uint8_t* v, const std::uint8_t* mask, const float* sinks,
+                      float* out);
+
 // Whether llama_gpu.h places a model's token_embd in D3D12_Weights: only a
 // tied embedding (no output.weight) of a type GET_ROWS supports, so the one
 // copy serves both the input lookup and the lm_head.

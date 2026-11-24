@@ -631,3 +631,180 @@ TEST_CASE("d3d12: dispatch profile groups by kind and reports untimed dispatches
     CHECK(format_d3d12_dispatch_profile("decode", only_missing).find("missing=1") !=
           std::string::npos);
 }
+
+// --- FLASH_ATTN_EXT (fork) ---
+
+namespace {
+
+struct FaCase {
+    ggml_type kv;
+    int d, n_q, n_head, n_head_kv, n_kv;
+    bool mask, sinks;
+    float softcap;
+};
+
+// Builds q/k/v the way llama's build_attn_mha does — permuted views of
+// [d, heads, tokens] tensors — runs ggml-cpu's FLASH_ATTN_EXT, and the
+// kernel emulation on the same bytes. Returns max |emu - cpu| / max |cpu|.
+double fa_rel_err(const FaCase& c) {
+    ggml_init_params ip = {};
+    ip.mem_size = 256u << 20;
+    ggml_context* ctx = ggml_init(ip);
+    std::mt19937 rng(7u + static_cast<unsigned>(c.n_kv * 3 + c.n_q));
+    std::uniform_real_distribution<float> uni(-1.f, 1.f);
+
+    ggml_tensor* q3 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, c.d, c.n_head, c.n_q);
+    for (int i = 0; i < ggml_nelements(q3); ++i)
+        static_cast<float*>(q3->data)[i] = uni(rng);
+    // The cache: [d, n_head_kv, n_kv] rows of the cache type.
+    auto make_cache = [&]() {
+        ggml_tensor* t = ggml_new_tensor_3d(ctx, c.kv, c.d, c.n_head_kv, c.n_kv);
+        std::vector<float> f(static_cast<std::size_t>(ggml_nelements(t)));
+        for (float& x : f)
+            x = uni(rng);
+        ggml_quantize_chunk(c.kv, f.data(), t->data, 0, c.n_head_kv * c.n_kv, c.d, nullptr);
+        return t;
+    };
+    ggml_tensor* k3 = make_cache();
+    ggml_tensor* v3 = make_cache();
+    const int mask_rows = (c.n_q + 63) / 64 * 64;
+    ggml_tensor* m = nullptr;
+    if (c.mask) {
+        m = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, c.n_kv, mask_rows);
+        auto* mh = static_cast<ggml_fp16_t*>(m->data);
+        for (int r = 0; r < mask_rows; ++r)
+            for (int i = 0; i < c.n_kv; ++i) {
+                // causal over the last n_q positions, plus a few random holes
+                const bool hide = i > c.n_kv - c.n_q + r || (rng() % 11u) == 0u;
+                mh[r * c.n_kv + i] = ggml_fp32_to_fp16(hide ? -INFINITY : 0.f);
+            }
+    }
+    ggml_tensor* sk = nullptr;
+    if (c.sinks) {
+        sk = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, c.n_head);
+        for (int i = 0; i < c.n_head; ++i)
+            static_cast<float*>(sk->data)[i] = uni(rng) * 2.f;
+    }
+    ggml_tensor* q = ggml_permute(ctx, q3, 0, 2, 1, 3);
+    ggml_tensor* k = ggml_permute(ctx, k3, 0, 2, 1, 3);
+    ggml_tensor* v = ggml_permute(ctx, v3, 0, 2, 1, 3);
+    const float scale = 1.f / std::sqrt(static_cast<float>(c.d));
+    ggml_tensor* fa = ggml_flash_attn_ext(ctx, q, k, v, m, scale, 0.f, c.softcap);
+    if (sk)
+        ggml_flash_attn_ext_add_sinks(fa, sk);
+    ggml_prec_set_acc(fa, GGML_PREC_F32);
+    ggml_cgraph* gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, fa);
+    ggml_graph_compute_with_ctx(ctx, gf, 2);
+
+    D3d12FaParams p;
+    p.n_kv = static_cast<std::uint32_t>(c.n_kv);
+    p.d = static_cast<std::uint32_t>(c.d);
+    p.n_q = static_cast<std::uint32_t>(c.n_q);
+    p.n_head = static_cast<std::uint32_t>(c.n_head);
+    p.gqa = static_cast<std::uint32_t>(c.n_head / c.n_head_kv);
+    p.nbq1 = static_cast<std::uint32_t>(q->nb[1]);
+    p.nbq2 = static_cast<std::uint32_t>(q->nb[2]);
+    p.nbk1 = static_cast<std::uint32_t>(k->nb[1]);
+    p.nbk2 = static_cast<std::uint32_t>(k->nb[2]);
+    p.nbv1 = static_cast<std::uint32_t>(v->nb[1]);
+    p.nbv2 = static_cast<std::uint32_t>(v->nb[2]);
+    p.has_mask = m ? 1u : 0u;
+    p.nbm1 = m ? static_cast<std::uint32_t>(m->nb[1]) : 0u;
+    p.nbm2 = m ? static_cast<std::uint32_t>(m->nb[2]) : 0u;
+    p.has_sinks = sk ? 1u : 0u;
+    p.kv_q8 = c.kv == GGML_TYPE_Q8_0 ? 1u : 0u;
+    d3d12_fa_scales(scale, c.softcap, &p.scale_bits, &p.softcap_bits);
+    std::vector<float> emu(static_cast<std::size_t>(c.d) * c.n_head * c.n_q);
+    d3d12_fa_emulate(p, static_cast<const std::uint8_t*>(q->data),
+                     static_cast<const std::uint8_t*>(k->data),
+                     static_cast<const std::uint8_t*>(v->data),
+                     m ? static_cast<const std::uint8_t*>(m->data) : nullptr,
+                     sk ? static_cast<const float*>(sk->data) : nullptr, emu.data());
+    double max_ref = 0.0, max_diff = 0.0;
+    const float* ref = static_cast<const float*>(fa->data);
+    for (std::size_t i = 0; i < emu.size(); ++i) {
+        if (!std::isfinite(ref[i]) || !std::isfinite(emu[i])) {
+            ggml_free(ctx);
+            return INFINITY;
+        }
+        max_ref = std::max(max_ref, std::fabs(static_cast<double>(ref[i])));
+        max_diff = std::max(max_diff, std::fabs(static_cast<double>(ref[i]) - emu[i]));
+    }
+    ggml_free(ctx);
+    return max_ref > 0 ? max_diff / max_ref : max_diff;
+}
+
+D3d12FlashAttnDesc qwen_fa_desc() {
+    D3d12FlashAttnDesc d;
+    d.k_type = d.v_type = GGML_TYPE_Q8_0;
+    d.dk = d.dv = 256;
+    d.n_q = 512;
+    d.n_head = 16;
+    d.n_head_kv = 4;
+    d.n_kv = 6400;
+    d.mask_ne1 = 512;
+    return d;
+}
+
+} // namespace
+
+TEST_CASE("ggml_d3d12: FLASH_ATTN_EXT rules") {
+    CHECK(d3d12_fa_supported(qwen_fa_desc()));
+    D3d12FlashAttnDesc d = qwen_fa_desc();
+    d.k_type = d.v_type = GGML_TYPE_F16;
+    CHECK(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.mask_type = GGML_TYPE_COUNT; // no mask
+    CHECK(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.v_type = GGML_TYPE_F16; // mixed K/V types
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.k_type = d.v_type = GGML_TYPE_Q4_0;
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.dk = d.dv = 576; // MLA-sized heads
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.dv = 128;
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.max_bias = 8.f; // ALiBi
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.ne3 = 2; // several KV streams
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.n_head = 15; // not a multiple of the K/V heads
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.mask_ne1 = 100; // mask shorter than the queries
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.strides_even = false;
+    CHECK_FALSE(d3d12_fa_supported(d));
+    d = qwen_fa_desc();
+    d.strides_fit_u32 = false;
+    CHECK_FALSE(d3d12_fa_supported(d));
+}
+
+TEST_CASE("ggml_d3d12: FLASH_ATTN_EXT emulation matches ggml-cpu") {
+    // Q8_0 K: ggml-cpu rounds Q to q8_0 for its vec_dot, the kernel keeps f32
+    // Q. F16 V: ggml-cpu accumulates V in f16, the kernel in f32. The two
+    // differ by that rounding only.
+    const FaCase cases[] = {
+        {GGML_TYPE_Q8_0, 256, 1, 16, 4, 300, true, false, 0.f}, // decode, Qwen3.5 shape
+        {GGML_TYPE_Q8_0, 256, 9, 16, 4, 200, true, false, 0.f}, // prefill, partial last block
+        {GGML_TYPE_Q8_0, 128, 5, 8, 8, 64, false, false, 0.f},  // no mask, exact block
+        {GGML_TYPE_F16, 64, 7, 4, 2, 130, true, true, 0.f},     // sinks
+        {GGML_TYPE_F16, 128, 3, 6, 2, 97, true, false, 30.f},   // softcap
+    };
+    for (const FaCase& c : cases) {
+        CAPTURE(c.d);
+        CAPTURE(c.n_kv);
+        CAPTURE(c.n_q);
+        const double tol = c.kv == GGML_TYPE_Q8_0 ? 2e-2 : 5e-3;
+        CHECK(fa_rel_err(c) < tol);
+    }
+}
