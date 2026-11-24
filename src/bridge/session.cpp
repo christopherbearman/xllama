@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <new>
 #include <string>
 
 // Backend availability. A build defines XLLAMA_USE_ORT when ORT GenAI is linked.
@@ -892,11 +893,21 @@ class LlamaSession final : public Session {
             const auto tc0 = std::chrono::steady_clock::now();
             const size_t need =
                 llama_state_seq_get_size_ext(ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-            m_ckpt.resize(need);
+            // ~50 MiB on Qwen3.5-9B, close to the 5 GiB title limit: a failed
+            // allocation skips the checkpoint instead of failing the turn.
+            bool have_room = true;
+            try {
+                m_ckpt.resize(need);
+            } catch (const std::bad_alloc&) {
+                have_room = false;
+                m_ckpt.clear();
+                m_ckpt.shrink_to_fit();
+                log_output("[xllama] session: recurrent checkpoint skipped (out of memory)\n");
+            }
             const size_t wrote =
-                need ? llama_state_seq_get_data_ext(ctx, m_ckpt.data(), need, 0,
-                                                    LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)
-                     : 0;
+                need && have_room ? llama_state_seq_get_data_ext(ctx, m_ckpt.data(), need, 0,
+                                                                 LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)
+                                  : 0;
             if (wrote == need && need > 0) {
                 const size_t covered = (pf - tokens.data()) + static_cast<size_t>(n_pf_head);
                 m_ckpt_tokens.assign(tokens.begin(), tokens.begin() + covered);

@@ -25,8 +25,6 @@
     #include "model-downloader.h"
     #include "web-fetch.h"
     #include "web-ui-html.h"
-    #include "xllama/think_mode.h"
-    #include "xllama/op_profile.h"
     #include "xllama/api_activity.h"
     #include "xllama/api_connection.h"
     #include "xllama/api_policy.h"
@@ -35,6 +33,7 @@
     #include "xllama/compute_admission.h"
     #include "xllama/http_framing.h"
     #include "xllama/model_provision.h"
+    #include "xllama/op_profile.h"
     #include "xllama/path_utils.h"
     #include "xllama/personalize.h"
     #include "xllama/platform.h"
@@ -45,6 +44,7 @@
     #include "xllama/session_hub.h"
     #include "xllama/sse.h"
     #include "xllama/stop_sequence_filter.h"
+    #include "xllama/think_mode.h"
     #include "xllama/tool_budget.h"
     #include "xllama/tool_request.h"
     #include "xllama/tool_template.h"
@@ -629,7 +629,9 @@ class SseStream {
     }
 
     // Fork: older turns the server had to drop to fit n_ctx (reported in usage).
-    void set_dropped(int n) { m_dropped = n; }
+    void set_dropped(int n) {
+        m_dropped = n;
+    }
 
     void finish(const wchar_t* reason, int prompt_tokens, int completion_tokens) {
         if (m_finished)
@@ -1273,7 +1275,8 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
         if (fitted_n_predict < 32) {
             status = "400 Bad Request";
             return error_json("the conversation is full: no room left to continue this reply "
-                              "(n_ctx " + std::to_string(policy_n_ctx) + ")");
+                              "(n_ctx " +
+                              std::to_string(policy_n_ctx) + ")");
         }
         if (fit.fits && fitted_n_predict != gp.n_predict) {
             ::xllama::log_output("[xllama] api: reply cap " + std::to_string(gp.n_predict) +
@@ -2460,7 +2463,8 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
             ::xllama::session_hub().reset_locked();
             ::xllama::log_output(std::string("[xllama] api: op profiling ") + (on ? "on" : "off") +
                                  " (model unloaded; applies from the next chat)\n");
-            write_response(socket, "200 OK", std::string("{\"profile\":") + (on ? "true" : "false") + "}");
+            write_response(socket, "200 OK",
+                           std::string("{\"profile\":") + (on ? "true" : "false") + "}");
             return;
         }
         if (req.method == "POST" && req.path == "/v1/debug/unload") {
@@ -2544,6 +2548,21 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
             std::string json;
             try {
                 json = handle_chat_locked(chat_body, status, ticket, socket, stream);
+            } catch (const std::bad_alloc&) {
+                // Fork: not the client's fault — say so, and leave a trace.
+                log_output("[xllama] api: chat failed: out of memory\n");
+                status = "503 Service Unavailable";
+                json = error_json("out of memory on the console; try a shorter chat or a "
+                                  "smaller model");
+            } catch (winrt::hresult_error const& e) {
+                // A wrong-typed JSON field lands here (WinRT accessors throw).
+                log_output("[xllama] api: chat failed: " + winrt::to_string(e.message()) + "\n");
+                status = "400 Bad Request";
+                json = error_json("malformed request body: " + winrt::to_string(e.message()));
+            } catch (const std::exception& e) {
+                log_output(std::string("[xllama] api: chat failed: ") + e.what() + "\n");
+                status = "500 Internal Server Error";
+                json = error_json(std::string("internal error: ") + e.what());
             } catch (...) {
                 status = "400 Bad Request";
                 json = error_json("malformed request body");
