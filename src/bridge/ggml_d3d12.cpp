@@ -10,6 +10,7 @@
     #include "ggml-cpu.h"
 
     #include <algorithm>
+    #include <cctype>
     #include <cmath>
     #include <cstdio>
     #include <cstring>
@@ -1430,7 +1431,8 @@ template <typename F> bool run_now(Gpu& g, F&& record, D3d12PhaseStats* stats = 
     const auto t1 = clock::now();
     ID3D12CommandList* lists[] = {g.cl.Get()};
     g.queue->ExecuteCommandLists(1, lists);
-    const bool ok = g.fence.signal_and_wait(g.queue.Get(), /*spin=*/true);
+    // Fork: 60 s is far past any real submission (a 512-token ubatch is ~2 s).
+    const bool ok = g.fence.signal_and_wait(g.queue.Get(), /*spin=*/true, 60000);
     if (stats) {
         stats->record_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
         stats->exec_wait_ms += std::chrono::duration<double, std::milli>(clock::now() - t1).count();
@@ -2122,6 +2124,11 @@ bool ew_check(Gpu& g, std::string* why) {
 // Set once ew_enabled() has decided; graph_compute (which holds g.mu and so
 // cannot run the check) reads it to quantize GPU-produced inputs on the GPU.
 std::atomic<int> g_ew_state{0}; // 0 undecided, 1 on, 2 off
+// Which small ops may run (bit per D3d12EwOp, bit 5 = the q8_K quantizer).
+// LocalState\d3d12-ew-ops.txt narrows it: any of "add mul silu swiglu rms_norm
+// quant", e.g. to find which one misbehaves without a new build.
+std::atomic<unsigned> g_ew_mask{0x3fu};
+constexpr unsigned kEwQuantBit = 1u << 5;
 
 // Small ops on the GPU: kernels built, no d3d12-ew-off.txt, first-use check passed.
 bool ew_enabled() {
@@ -2136,6 +2143,34 @@ bool ew_enabled() {
             std::fclose(f);
             log_output("[xllama] d3d12: small ops off (d3d12-ew-off.txt)\n");
             return;
+        }
+        if (FILE* f =
+                _wfopen(utf8_to_wstring(resolve_local_path("d3d12-ew-ops.txt")).c_str(), L"rb")) {
+            char buf[256] = {};
+            const std::size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+            std::fclose(f);
+            const std::string t(buf, n);
+            unsigned m = 0;
+            const char* names[] = {"add", "mul", "silu", "swiglu", "rms_norm", "quant"};
+            for (unsigned i = 0; i < 6; ++i) {
+                // whole words only: "mul" must not match inside another name
+                for (std::size_t at = t.find(names[i]); at != std::string::npos;
+                     at = t.find(names[i], at + 1)) {
+                    const std::size_t end = at + std::strlen(names[i]);
+                    const bool l =
+                        at == 0 ||
+                        (!std::isalnum(static_cast<unsigned char>(t[at - 1])) && t[at - 1] != '_');
+                    const bool r =
+                        end >= t.size() ||
+                        (!std::isalnum(static_cast<unsigned char>(t[end])) && t[end] != '_');
+                    if (l && r) {
+                        m |= 1u << i;
+                        break;
+                    }
+                }
+            }
+            g_ew_mask = m;
+            log_output("[xllama] d3d12: small ops limited to '" + t + "'\n");
         }
         std::lock_guard<std::mutex> lock(g.mu);
         std::string why;
@@ -2358,8 +2393,22 @@ bool submit_ops(Gpu& g, const std::vector<Op>& ops) {
             }
         },
         &g.phase);
-    if (!ran)
+    if (!ran) {
+        // Fork: name what was in the submission that failed or hung.
+        std::string list;
+        for (std::size_t i = 0; i < ops.size() && i < 48; ++i) {
+            const ggml_tensor* n = ops[i].node;
+            char one[96];
+            std::snprintf(one, sizeof(one), "%s%s[%lld,%lld,%lld]%s ",
+                          ops[i].quant_x ? "quant>" : "", ggml_op_desc(n),
+                          static_cast<long long>(n->ne[0]), static_cast<long long>(n->ne[1]),
+                          static_cast<long long>(n->ne[2]), ops[i].barrier ? "|" : "");
+            list += one;
+        }
+        log_output("[xllama] d3d12: submission of " + std::to_string(ops.size()) +
+                   " dispatches failed or timed out: " + list + "\n");
         return false;
+    }
     bool ts_ok = false;
     double submission_gpu_ms = 0.0;
     if (ts && g.ts_freq > 0) {
@@ -2592,8 +2641,8 @@ ggml_status backend_graph_compute(ggml_backend_t, ggml_cgraph* cgraph) {
         // Fork: a q8_K input produced on the GPU is quantized there too;
         // anything else waits for the submission, as before.
         const bool gpu_quant = x_on_gpu && at == GGML_TYPE_Q8_K && g.pso_q8k &&
-                               g_ew_state.load() == 1 && x->nb[0] == sizeof(float) &&
-                               x->ne[0] % 256 == 0;
+                               g_ew_state.load() == 1 && (g_ew_mask.load() & kEwQuantBit) &&
+                               x->nb[0] == sizeof(float) && x->ne[0] % 256 == 0;
         if (x_on_gpu && !gpu_quant && !flush())
             return GGML_STATUS_FAILED;
         const int k = static_cast<int>(x->ne[0]);
@@ -2805,7 +2854,11 @@ bool dev_supports_op(ggml_backend_dev_t, const ggml_tensor* op) {
     case GGML_OP_RMS_NORM:
     case GGML_OP_UNARY:
     case GGML_OP_GLU:
-        return ew_buffers_ok(op) && d3d12_ew_op(op) != D3d12EwOp::None && ew_enabled();
+        if (!ew_buffers_ok(op))
+            return false;
+        if (const D3d12EwOp eo = d3d12_ew_op(op); eo != D3d12EwOp::None)
+            return ew_enabled() && (g_ew_mask.load() & (1u << static_cast<unsigned>(eo))) != 0;
+        return false;
     default:
         return false;
     }

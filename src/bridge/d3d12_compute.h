@@ -65,7 +65,9 @@ struct FenceEvent {
 class QueueFence {
   public:
     bool init(ID3D12Device* device, std::string* err);
-    bool signal_and_wait(ID3D12CommandQueue* queue, bool spin);
+    // timeout_ms > 0 (spin only): give up and return false after that long —
+    // a hung submission then reports instead of freezing the caller.
+    bool signal_and_wait(ID3D12CommandQueue* queue, bool spin, unsigned timeout_ms = 0);
 
   private:
     ComPtr<ID3D12Fence> fence_;
