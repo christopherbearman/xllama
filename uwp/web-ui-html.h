@@ -795,7 +795,9 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   if (!reply.build && !isImage && !opt.append && !opt.noRepeatRetry && !reply.error && !reply.stopped) {
     const idx = current.messages.indexOf(reply);
     let prev = null; for (let i = idx - 1; i >= 0; i--) if (current.messages[i].role === "assistant" && !current.messages[i].error) { prev = current.messages[i]; break; }
-    if (prev && similar(prev.content, reply.content) > 0.6) {
+    // A corrected page is meant to look like the last one: code replies are never "repeats".
+    const hasCode = t => /```|<html|<svg|<script|<style|function\s*\w*\s*\(|=>\s*\{/i.test(answerOf(t) || "");
+    if (prev && !hasCode(reply.content) && !hasCode(prev.content) && similar(prev.content, reply.content) > 0.6) {
       const h = history.map(x => ({ ...x })); const u = h[h.length - 1];
       if (u && u.role === "user") {
         u.content += NO_REPEAT_NOTE;
@@ -854,13 +856,13 @@ async function autoCheck(reply) {
   const orig = unBuild(lastUser(conv.messages.length - 1)?.content || "");
   // One self-contained message: the server can trim its reply cap but never
   // drops the final message, so the page can no longer silently vanish.
-  const one = "The original request was:\n" + orig.slice(0, 1500) + "\n\nHere is the current page:\n```html\n" + html + "\n```\n\n" + report;
+  const one = "The original request was:\n" + orig.slice(0, 1500) + "\n\nHere is the current pa)XUI"
+    R"XUI(ge:\n```html\n" + html + "\n```\n\n" + report;
   const history = [{ role: "user", content: one }];
   await streamInto(fix, history, reply.model || $("#model").value, "Writing the fixes", false, {});
 }
 
-const PATCH_RULES = `Fix every problem. Reply ONLY with )XUI"
-    R"XUI(SEARCH/REPLACE patches: no complete file and no explanation. Write each change exactly like this:
+const PATCH_RULES = `Fix every problem. Reply ONLY with SEARCH/REPLACE patches: no complete file and no explanation. Write each change exactly like this:
 <<<<<<< SEARCH
 existing lines copied exactly from the page
 =======
@@ -1022,12 +1024,12 @@ $("#o-check").onchange = () => { settings.autoCheck = $("#o-check").checked; LS.
 $("#s-auto").onchange = () => { settings.autoContinue = $("#s-auto").checked; LS.set("xa.settings", settings); };
 $("#s-max").onchange = () => { settings.max_tokens = Math.max(64, Math.min(8192, +$("#s-max").value || 2048)); LS.set("xa.settings", settings); };
 $("#s-key-go").onclick = async () => {
-  try { const r = await fetch(API + "/v1/config/web-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: $("#s-key").value.trim() }) }); const j = await r.json(); $("#s-key-st").textContent = "Saved. Provider: " + (j.provider || "?"); $("#s-key").value = ""; poll(); }
+  try { const r = await fetch(API + "/v1/config/web-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: $("#s-key").value.trim() }) )XUI"
+    R"XUI(}); const j = await r.json(); $("#s-key-st").textContent = "Saved. Provider: " + (j.provider || "?"); $("#s-key").value = ""; poll(); }
   catch { $("#s-key-st").textContent = "Couldn't reach the Xbox."; }
 };
 $("#s-pull-go").onclick = async () => {
-  const na)XUI"
-    R"XUI(me = $("#s-pull").value; const st = $("#s-pull-st"); st.textContent = "Starting…";
+  const name = $("#s-pull").value; const st = $("#s-pull-st"); st.textContent = "Starting…";
   try {
     const r = await fetch(API + "/api/pull", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: name }) });
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";

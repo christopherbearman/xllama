@@ -783,7 +783,9 @@ async function streamInto(reply, history, model, waitLabel, isImage, opt = {}) {
   if (!reply.build && !isImage && !opt.append && !opt.noRepeatRetry && !reply.error && !reply.stopped) {
     const idx = current.messages.indexOf(reply);
     let prev = null; for (let i = idx - 1; i >= 0; i--) if (current.messages[i].role === "assistant" && !current.messages[i].error) { prev = current.messages[i]; break; }
-    if (prev && similar(prev.content, reply.content) > 0.6) {
+    // A corrected page is meant to look like the last one: code replies are never "repeats".
+    const hasCode = t => /```|<html|<svg|<script|<style|function\s*\w*\s*\(|=>\s*\{/i.test(answerOf(t) || "");
+    if (prev && !hasCode(reply.content) && !hasCode(prev.content) && similar(prev.content, reply.content) > 0.6) {
       const h = history.map(x => ({ ...x })); const u = h[h.length - 1];
       if (u && u.role === "user") {
         u.content += NO_REPEAT_NOTE;
