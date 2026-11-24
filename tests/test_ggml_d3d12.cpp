@@ -808,3 +808,107 @@ TEST_CASE("ggml_d3d12: FLASH_ATTN_EXT emulation matches ggml-cpu") {
         CHECK(fa_rel_err(c) < tol);
     }
 }
+
+// --- Small ops between the matmuls (fork) ---
+
+TEST_CASE("ggml_d3d12: q8_K quantizer emulation equals ggml's bit for bit") {
+    std::mt19937 rng(5);
+    std::uniform_real_distribution<float> uni(-3.f, 3.f);
+    const int k = 512, rows = 3;
+    std::vector<float> x(static_cast<std::size_t>(k) * rows);
+    for (float& v : x)
+        v = uni(rng);
+    x[7] = 9.f;    // a clear maximum
+    x[300] = -9.f; // block 1: negative maximum ...
+    x[400] = 9.f;  // ... tied in |x| later in the block: the first one wins
+    for (int j = 0; j < 256; ++j)
+        x[static_cast<std::size_t>(2) * k + j] = 0.f; // row 2, block 0: all zero
+    const std::size_t row = ggml_row_size(GGML_TYPE_Q8_K, k);
+    std::vector<std::uint8_t> want(row * rows), got(row * rows);
+    const auto from_float = ggml_get_type_traits_cpu(GGML_TYPE_Q8_K)->from_float;
+    for (int r = 0; r < rows; ++r)
+        from_float(x.data() + static_cast<std::size_t>(r) * k, want.data() + r * row, k);
+    d3d12_quant_q8k_emulate(x.data(), k * sizeof(float), k, rows, got.data(), row);
+    for (int r = 0; r < rows; ++r)
+        for (int b = 0; b < k / 256; ++b) {
+            const std::size_t o = r * row + b * 292;
+            const bool zero = r == 2 && b == 0;
+            // d and qs always; bsums except where ggml leaves them unwritten.
+            CHECK(std::memcmp(want.data() + o, got.data() + o, zero ? 260 : 292) == 0);
+        }
+}
+
+namespace {
+
+// Runs `node` on ggml-cpu and through d3d12_ew_emulate; max |diff| / max |ref|.
+double ew_rel_err(ggml_context* ctx, ggml_tensor* node) {
+    ggml_cgraph* gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, node);
+    ggml_graph_compute_with_ctx(ctx, gf, 2);
+    const D3d12EwOp op = d3d12_ew_op(node);
+    REQUIRE(op != D3d12EwOp::None);
+    const D3d12EwParams p = d3d12_ew_params(node);
+    std::vector<std::uint8_t> out(ggml_nbytes(node));
+    d3d12_ew_emulate(op, p, static_cast<const std::uint8_t*>(node->src[0]->data),
+                     node->src[1] ? static_cast<const std::uint8_t*>(node->src[1]->data) : nullptr,
+                     out.data());
+    const auto* ref = static_cast<const float*>(node->data);
+    const auto* emu = reinterpret_cast<const float*>(out.data());
+    double mr = 0, md = 0;
+    for (std::int64_t i = 0; i < ggml_nelements(node); ++i) {
+        mr = std::max(mr, std::fabs(static_cast<double>(ref[i])));
+        md = std::max(md, std::fabs(static_cast<double>(ref[i]) - emu[i]));
+    }
+    return mr > 0 ? md / mr : md;
+}
+
+ggml_tensor* rnd(ggml_context* ctx, std::mt19937& rng, std::int64_t a, std::int64_t b,
+                 std::int64_t c = 1) {
+    std::uniform_real_distribution<float> uni(-2.f, 2.f);
+    ggml_tensor* t = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, a, b, c);
+    for (std::int64_t i = 0; i < ggml_nelements(t); ++i)
+        static_cast<float*>(t->data)[i] = uni(rng);
+    return t;
+}
+
+} // namespace
+
+TEST_CASE("ggml_d3d12: small-op emulation matches ggml-cpu") {
+    ggml_init_params ip = {};
+    ip.mem_size = 64u << 20;
+    ggml_context* ctx = ggml_init(ip);
+    std::mt19937 rng(11);
+    ggml_tensor* x = rnd(ctx, rng, 300, 7, 2);
+    ggml_tensor* y = rnd(ctx, rng, 300, 7, 2);
+    ggml_tensor* w = rnd(ctx, rng, 300, 1);
+    CHECK(ew_rel_err(ctx, ggml_add(ctx, x, y)) < 1e-6);
+    CHECK(ew_rel_err(ctx, ggml_mul(ctx, x, w)) < 1e-6); // norm weight, broadcast rows
+    CHECK(ew_rel_err(ctx, ggml_rms_norm(ctx, x, 1e-6f)) < 1e-5);
+    CHECK(ew_rel_err(ctx, ggml_silu(ctx, x)) < 1e-6);
+    CHECK(ew_rel_err(ctx, ggml_swiglu_split(ctx, x, y)) < 1e-6);
+    ggml_tensor* gu = rnd(ctx, rng, 600, 5);
+    CHECK(ew_rel_err(ctx, ggml_swiglu(ctx, gu)) < 1e-6);         // fused gate|up
+    CHECK(ew_rel_err(ctx, ggml_swiglu_swapped(ctx, gu)) < 1e-6); // up|gate
+    // RMS_NORM over a strided view (per-head norm on a row slice).
+    ggml_tensor* v = ggml_view_2d(ctx, x, 128, 7, x->nb[1], 64 * sizeof(float));
+    CHECK(ew_rel_err(ctx, ggml_rms_norm(ctx, v, 1e-6f)) < 1e-5);
+    ggml_free(ctx);
+}
+
+TEST_CASE("ggml_d3d12: small-op rules") {
+    ggml_init_params ip = {};
+    ip.mem_size = 8u << 20;
+    ip.no_alloc = true;
+    ggml_context* ctx = ggml_init(ip);
+    ggml_tensor* x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 4);
+    ggml_tensor* h = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 64, 4);
+    CHECK(d3d12_ew_op(ggml_add(ctx, x, x)) == D3d12EwOp::Add);
+    CHECK(d3d12_ew_op(ggml_add(ctx, h, h)) == D3d12EwOp::None);
+    CHECK(d3d12_ew_op(ggml_gelu(ctx, x)) == D3d12EwOp::None);
+    CHECK(d3d12_ew_op(ggml_geglu(ctx, x)) == D3d12EwOp::None);
+    CHECK(d3d12_ew_op(ggml_sub(ctx, x, x)) == D3d12EwOp::None);
+    // An output wider than one dispatch grid.
+    ggml_tensor* tall = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 70000);
+    CHECK(d3d12_ew_op(ggml_silu(ctx, tall)) == D3d12EwOp::None);
+    ggml_free(ctx);
+}

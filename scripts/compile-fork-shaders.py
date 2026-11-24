@@ -73,6 +73,17 @@ def main() -> None:
                         "-Fo", str(obj), str(src)], check=True)
         emit(obj.read_bytes(), gen / "ggml_d3d12_fa_dxil.h", "shaders/ggml_d3d12_fa.hlsl",
              "kGgmlD3d12FaDxil")
+    # Small ops (one blob per entry point of ggml_d3d12_ew.hlsl).
+    src = ROOT / "shaders" / "ggml_d3d12_ew.hlsl"
+    for entry in ["Add", "Mul", "Silu", "Swiglu", "RmsNorm", "QuantQ8K"]:
+        low = entry.lower()
+        with tempfile.TemporaryDirectory() as td:
+            obj = Path(td) / "out.dxil"
+            subprocess.run([dxc, "-T", "cs_6_4", "-E", "CS" + entry, "-I", str(ROOT / "shaders"),
+                            "-Fo", str(obj), str(src)], check=True)
+            emit(obj.read_bytes(), gen / f"ggml_d3d12_ew_{low}_dxil.h",
+                 f"shaders/ggml_d3d12_ew.hlsl -E CS{entry}",
+                 f"kGgmlD3d12Ew{low.capitalize()}Dxil")
     for name, camel in TILE_TARGETS:
         src = ROOT / "shaders" / f"ggml_d3d12_mmt_{name}.hlsl"
         for w in WIDTHS:

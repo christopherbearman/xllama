@@ -172,6 +172,42 @@ void d3d12_fa_emulate(const D3d12FaParams& p, const std::uint8_t* q, const std::
                       const std::uint8_t* v, const std::uint8_t* mask, const float* sinks,
                       float* out);
 
+// --- Small ops between the matmuls (fork) ---
+// shaders/ggml_d3d12_ew.hlsl: ADD, MUL, SILU, SWIGLU, RMS_NORM on f32 rows,
+// and the f32 -> q8_K activation quantizer, so a layer's matmuls chain on the
+// GPU without a CPU handover between them.
+enum class D3d12EwOp { Add, Mul, Silu, Swiglu, RmsNorm, None };
+
+// The kernels' root constants (EwParams in the HLSL), in order.
+struct D3d12EwParams {
+    std::uint32_t ne0 = 0, ne1 = 1, ne2 = 1, ne3 = 1;
+    std::uint32_t s0_nb1 = 0, s0_nb2 = 0, s0_nb3 = 0;
+    std::uint32_t s1_ne0 = 1, s1_ne1 = 1, s1_ne2 = 1, s1_ne3 = 1;
+    std::uint32_t s1_nb1 = 0, s1_nb2 = 0, s1_nb3 = 0;
+    std::uint32_t d_nb1 = 0, d_nb2 = 0, d_nb3 = 0;
+    std::uint32_t s0_off = 0, s1_off = 0, d_off = 0;
+    std::uint32_t p0 = 0, p1 = 0, p2 = 0, p3 = 0;
+};
+static_assert(sizeof(D3d12EwParams) == 24 * 4, "EwParams is 24 root constants");
+
+// Which kernel runs `node`, or None when the GPU path does not take it (type,
+// layout, unsupported unary/glu variant, a grid over kD3d12MaxGroups).
+// Buffer placement is checked separately by the backend.
+D3d12EwOp d3d12_ew_op(const ggml_tensor* node);
+
+// Root constants for `node` (offsets 0); grid = (ne1, ne2, ne3).
+D3d12EwParams d3d12_ew_params(const ggml_tensor* node);
+
+// Host emulation of the kernel for `op` on the bytes the root UAVs address.
+void d3d12_ew_emulate(D3d12EwOp op, const D3d12EwParams& p, const std::uint8_t* s0,
+                      const std::uint8_t* s1, std::uint8_t* d);
+
+// Host emulation of CSQuantQ8K: rows of k f32 (x_stride bytes apart) into
+// q8_K rows out_stride bytes apart. Equals quantize_row_q8_K_ref except that
+// an all-zero block gets zero bsums (the CPU leaves them unwritten).
+void d3d12_quant_q8k_emulate(const float* x, std::size_t x_stride, int k, int nrows,
+                             std::uint8_t* out, std::size_t out_stride);
+
 // Whether llama_gpu.h places a model's token_embd in D3D12_Weights: only a
 // tied embedding (no output.weight) of a type GET_ROWS supports, so the one
 // copy serves both the input lookup and the lm_head.

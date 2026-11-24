@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Small ops on the GPU (fork, D3D12).** ADD, MUL, RMS_NORM, SILU and SWIGLU
+  run as D3D12 kernels (`shaders/ggml_d3d12_ew.hlsl`), and a matmul whose
+  input was produced on the GPU has it quantized to q8_K there, so a layer's
+  matmuls chain in one submission instead of handing over to the CPU between
+  each. Dispatches that share memory are ordered with UAV barriers. Checked
+  against the host emulation on first use; `LocalState\d3d12-ew-off.txt`
+  turns it off.
+
 - **Recurrent checkpoint for hybrid models (fork).** Qwen3.5 / LFM2 cannot
   rewind their recurrent state, so a follow-up whose history differed from
   what was generated (a re-rendered reply, a stripped plan) re-read the whole
