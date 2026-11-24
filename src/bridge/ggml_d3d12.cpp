@@ -2528,6 +2528,7 @@ ggml_status backend_graph_compute(ggml_backend_t, ggml_cgraph* cgraph) {
         std::size_t off;
         std::uint32_t row;
         int ncols;
+        const std::uint8_t* end; // data + the f32 bytes it was quantized from
     };
     std::vector<Quantized> done;
     std::size_t used = 0;
@@ -2568,6 +2569,16 @@ ggml_status backend_graph_compute(ggml_backend_t, ggml_cgraph* cgraph) {
         pend_r.insert(pend_r.end(), reads.begin(), reads.end());
         pend_w.insert(pend_w.end(), writes.begin(), writes.end());
         ops.push_back(op);
+        // Fork: the graph allocator reuses memory within one submission, so a
+        // later tensor can sit where an earlier, already quantized input was.
+        // A quantized copy is only reusable while nothing has overwritten it.
+        for (const Span& w : writes)
+            done.erase(std::remove_if(done.begin(), done.end(),
+                                      [&](const Quantized& d) {
+                                          const auto* a = static_cast<const std::uint8_t*>(d.data);
+                                          return w.a < d.end && a < w.b;
+                                      }),
+                       done.end());
     };
     auto flush = [&]() -> bool {
         if (ops.empty())
@@ -2663,7 +2674,7 @@ ggml_status backend_graph_compute(ggml_backend_t, ggml_cgraph* cgraph) {
                 Op qop{node, used, row};
                 qop.quant_x = x;
                 place(qop, {span_of(x)}, {xq_span(used, bytes)});
-                done.push_back({x->data, at, used, row, ncols});
+                done.push_back({x->data, at, used, row, ncols, span_of(x).b});
                 q = &done.back();
                 used += (bytes + 255) & ~std::size_t(255);
             }
@@ -2680,7 +2691,7 @@ ggml_status backend_graph_compute(ggml_backend_t, ggml_cgraph* cgraph) {
             g.phase.quant_ms +=
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tq)
                     .count();
-            done.push_back({x->data, at, used, row, ncols});
+            done.push_back({x->data, at, used, row, ncols, span_of(x).b});
             q = &done.back();
             used += (bytes + 255) & ~std::size_t(255); // root UAV addresses stay aligned
         }
