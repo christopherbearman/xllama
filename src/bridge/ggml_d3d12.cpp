@@ -2401,12 +2401,12 @@ bool submit_ops(Gpu& g, const std::vector<Op>& ops) {
                 }
                 const double ms =
                     1000.0 * static_cast<double>(t[i + 1] - t[i]) / static_cast<double>(g.ts_freq);
-                const bool small = ops[i].quant_x ||
-                                   (node->op != GGML_OP_MUL_MAT && node->op != GGML_OP_GET_ROWS &&
-                                    node->op != GGML_OP_FLASH_ATTN_EXT);
+                const bool small_op = ops[i].quant_x || (node->op != GGML_OP_MUL_MAT &&
+                                                         node->op != GGML_OP_GET_ROWS &&
+                                                         node->op != GGML_OP_FLASH_ATTN_EXT);
                 const double bytes =
                     ops[i].quant_x ? static_cast<double>(ggml_nbytes(ops[i].quant_x))
-                    : small        ? static_cast<double>(ggml_nbytes(node))
+                    : small_op     ? static_cast<double>(ggml_nbytes(node))
                     : node->op == GGML_OP_FLASH_ATTN_EXT
                         ? 2.0 * static_cast<double>(ggml_nbytes(node->src[1]))
                     : node->op == GGML_OP_GET_ROWS ? static_cast<double>(w->nb[1]) * node->ne[1]
