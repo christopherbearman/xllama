@@ -527,3 +527,52 @@ TEST_CASE("Session: divergent restored snapshot matches cold prefill (opt-in: XL
     std::error_code ec;
     std::filesystem::remove(path, ec);
 }
+
+// Fork: a hybrid model (recurrent state that cannot rewind) restores the
+// checkpoint saved a few tokens before the previous prompt's end, instead of
+// re-prefilling everything, when the next prompt diverges after that point —
+// the chat shape where the previous reply is re-rendered differently. Opt-in:
+//   XLLAMA_TEST_MODEL=/path/to/hybrid.gguf ./xllama-tests
+TEST_CASE(
+    "Session: hybrid checkpoint shortens a diverging re-prefill (opt-in: XLLAMA_TEST_MODEL)") {
+    const char* model_env = std::getenv("XLLAMA_TEST_MODEL");
+    if (!model_env)
+        return;
+    xllama::SessionParams sp;
+    sp.model_path = model_env;
+    sp.n_ctx = 1024;
+    std::string err;
+    auto sess = xllama::Session::create(sp, &err);
+    REQUIRE_MESSAGE(sess, err);
+    auto mkgp = [](const std::string& p, int n) {
+        xllama::GenerateParams gp;
+        gp.prompt = p;
+        gp.n_predict = n;
+        gp.temperature = 0.0f;
+        return gp;
+    };
+    std::string a = "Here is a list of fruits and their colours.\n";
+    for (int i = 0; i < 12; ++i)
+        a += "Item " + std::to_string(i) + ": a banana is yellow and an apple is red.\n";
+    a += "Question: what colour is a banana? Answer:";
+    // A long reply puts the divergence below far from the resident end, past
+    // the recurrent cache's few-token rollback window.
+    const auto r1 = sess->generate(mkgp(a, 96));
+    REQUIRE(r1.success);
+    REQUIRE(r1.n_p_eval >= 64);
+    // Next turn: same text, then something other than what the model wrote.
+    const std::string b = a + " Yellow.\nQuestion: what colour is an apple? Answer:";
+    const auto r2 = sess->generate(mkgp(b, 16));
+    REQUIRE(r2.success);
+    auto fresh = xllama::Session::create(sp, &err);
+    REQUIRE_MESSAGE(fresh, err);
+    const auto rf = fresh->generate(mkgp(b, 16));
+    REQUIRE(rf.success);
+    // Either regime prefills less than the whole prompt: a pure-attention cache
+    // rewinds to the common prefix, a hybrid one restores its checkpoint.
+    CHECK(r2.n_p_eval < sess->count_tokens(b));
+    CHECK(r2.n_p_eval <= sess->count_tokens(b) - sess->count_tokens(a) + 24);
+    REQUIRE(r2.output_text.size() >= 5);
+    REQUIRE(rf.output_text.size() >= 5);
+    CHECK(r2.output_text.substr(0, 5) == rf.output_text.substr(0, 5));
+}

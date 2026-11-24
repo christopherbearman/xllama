@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Recurrent checkpoint for hybrid models (fork).** Qwen3.5 / LFM2 cannot
+  rewind their recurrent state, so a follow-up whose history differed from
+  what was generated (a re-rendered reply, a stripped plan) re-read the whole
+  conversation. Each prefill now saves that state 16 tokens before the prompt
+  end; the next turn restores it and prefills only from there.
+
 - **Attention on the GPU (fork, D3D12).** `FLASH_ATTN_EXT` — the
   full-attention layers' look-back over the KV cache — runs as a D3D12 kernel
   (`shaders/ggml_d3d12_fa.hlsl`) for F16 and Q8_0 caches, instead of on the

@@ -437,10 +437,10 @@ std::unique_ptr<Session> create_ort(const SessionParams& sp, std::string* err) {
 
     #include "decode_loop.h" // shared prefill + generation loops; needs llama.h
     #include "llama_gpu.h"
+    #include "sampler_chain.h"     // shared sampler chain (#125); needs llama.h
     #include "xllama/ggml_d3d12.h" // fork: per-phase GPU counters in chat
-    #include "xllama/op_profile.h"  // fork: per-op-type timing (debug switch)
-    #include "sampler_chain.h" // shared sampler chain (#125); needs llama.h
     #include "xllama/llama_raii.h"
+    #include "xllama/op_profile.h" // fork: per-op-type timing (debug switch)
 
     #include <vector>
 
@@ -477,7 +477,18 @@ class LlamaSession final : public Session {
     // whenever the KV state stops being trustworthy (decode failure).
     std::vector<llama_token> m_kv_tokens;
 
-    bool m_kv_q8 = false;         // #171: q8_0 KV + forced flash attention
+    bool m_kv_q8 = false; // #171: q8_0 KV + forced flash attention
+    // Fork: hybrid/recurrent models (Qwen3.5's delta-net) cannot rewind their
+    // recurrent state, so any divergence before the end of the resident text
+    // meant a full re-prefill. Each prefill saves the recurrent state a few
+    // tokens before the prompt's end (the tail of the user's message, which
+    // the next turn re-renders identically); a later turn that still matches
+    // those tokens restores it, trims the attention KV, and prefills only the
+    // rest. m_ckpt_tokens are the tokens the saved state covers.
+    std::vector<std::uint8_t> m_ckpt;
+    std::vector<llama_token> m_ckpt_tokens;
+    static constexpr int kCkptTail = 16; // tokens before the prompt end
+    static constexpr int kCkptMinPrefill = 64;
     bool m_prompt_lookup = false; // #210: draft-free speculative decoding
     int m_gpu_layers = 0;         // layers on the d3d12 backend (llama_gpu.h)
 
@@ -718,6 +729,30 @@ class LlamaSession final : public Session {
                 // state cannot be rewound — and mutate NOTHING on failure, so
                 // decoding on top would corrupt the output. Degrade to a full
                 // clear + re-prefill instead.
+                // Fork: a recurrent checkpoint the new prompt still matches
+                // turns the full re-prefill below into a partial one.
+                if (kv_keep < m_kv_tokens.size() && !m_ckpt.empty() &&
+                    kv_keep >= m_ckpt_tokens.size() && m_ckpt_tokens.size() <= m_kv_tokens.size() &&
+                    std::equal(m_ckpt_tokens.begin(), m_ckpt_tokens.end(), tokens.begin()) &&
+                    !llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(kv_keep), -1)) {
+                    const size_t ck = m_ckpt_tokens.size();
+                    const size_t got = llama_state_seq_set_data_ext(
+                        ctx, m_ckpt.data(), m_ckpt.size(), 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                    if (got == m_ckpt.size() &&
+                        llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(ck), -1)) {
+                        char rb[200];
+                        snprintf(rb, sizeof(rb),
+                                 "[xllama] session: restored recurrent checkpoint at %zu "
+                                 "(common=%zu resident=%zu prompt=%zu)\n",
+                                 ck, kv_keep, m_kv_tokens.size(), tokens.size());
+                        log_output(rb);
+                        kv_keep = ck;
+                    } else {
+                        log_output("[xllama] session: recurrent checkpoint restore failed\n");
+                        m_ckpt.clear();
+                        m_ckpt_tokens.clear();
+                    }
+                }
                 if (kv_keep < m_kv_tokens.size() &&
                     !llama_memory_seq_rm(mem, 0, static_cast<llama_pos>(kv_keep), -1)) {
                     char rb[256];
@@ -844,7 +879,42 @@ class LlamaSession final : public Session {
             ggml_d3d12_take_stats(nullptr); // fork: start the prefill counters clean
         wd.enter_prefill(n_pf);
         const auto t_prefill0 = std::chrono::steady_clock::now();
-        if (!in_place && !prefill_chunked(ctx, pf, n_pf, &wd)) {
+        // Fork: on a hybrid model, stop kCkptTail tokens short, save the
+        // recurrent state there, then prefill the tail (see m_ckpt).
+        int n_pf_head = n_pf;
+        const bool ckpt_here =
+            !in_place && full_prompt && n_pf >= kCkptMinPrefill &&
+            (llama_model_is_hybrid(m_model.get()) || llama_model_is_recurrent(m_model.get()));
+        if (ckpt_here)
+            n_pf_head = n_pf - kCkptTail;
+        bool prefill_ok = in_place || prefill_chunked(ctx, pf, n_pf_head, &wd);
+        if (prefill_ok && ckpt_here) {
+            const auto tc0 = std::chrono::steady_clock::now();
+            const size_t need =
+                llama_state_seq_get_size_ext(ctx, 0, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+            m_ckpt.resize(need);
+            const size_t wrote =
+                need ? llama_state_seq_get_data_ext(ctx, m_ckpt.data(), need, 0,
+                                                    LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)
+                     : 0;
+            if (wrote == need && need > 0) {
+                const size_t covered = (pf - tokens.data()) + static_cast<size_t>(n_pf_head);
+                m_ckpt_tokens.assign(tokens.begin(), tokens.begin() + covered);
+                char cb[160];
+                snprintf(cb, sizeof(cb),
+                         "[xllama] session: recurrent checkpoint at %zu (%.1f MiB, %.0f ms)\n",
+                         covered, static_cast<double>(need) / 1048576.0,
+                         std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - tc0)
+                             .count());
+                log_output(cb);
+            } else {
+                m_ckpt.clear();
+                m_ckpt_tokens.clear();
+            }
+            prefill_ok = prefill_chunked(ctx, pf + n_pf_head, n_pf - n_pf_head, nullptr);
+        }
+        if (!prefill_ok) {
             if (wd.stalled()) {
                 res.stalled = true;
                 res.error_msg = wd.stall_error();
@@ -957,9 +1027,10 @@ class LlamaSession final : public Session {
             if (ggml_d3d12_take_stats(&ds)) {
                 log_output(format_d3d12_phase("decode", ds));
                 char db[160];
-                snprintf(db, sizeof(db),
-                         "[xllama] d3d12-decode tokens=%d per_token_calls=%.1f\n", dlr.n_generated,
-                         dlr.n_generated > 0 ? static_cast<double>(ds.calls) / dlr.n_generated : 0.0);
+                snprintf(db, sizeof(db), "[xllama] d3d12-decode tokens=%d per_token_calls=%.1f\n",
+                         dlr.n_generated,
+                         dlr.n_generated > 0 ? static_cast<double>(ds.calls) / dlr.n_generated
+                                             : 0.0);
                 log_output(db);
             }
         }
