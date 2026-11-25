@@ -2350,7 +2350,10 @@ bool submit_ops(Gpu& g, const std::vector<Op>& ops) {
                 cl->EndQuery(g.ts.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
             if (dt)
                 cl->EndQuery(g.dts.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
-            const D3D12_GPU_VIRTUAL_ADDRESS xq_va = g.xq->GetGPUVirtualAddress();
+            // Fork: a submission of small ops only (the first layer's norm when
+            // the embedding lookup ran on the CPU) comes before any matmul has
+            // created g.xq.
+            const D3D12_GPU_VIRTUAL_ADDRESS xq_va = g.xq ? g.xq->GetGPUVirtualAddress() : 0;
             UINT stamp = 0;
             const auto after_dispatch = [&]() {
                 if (!dt)
