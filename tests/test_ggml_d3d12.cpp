@@ -912,3 +912,65 @@ TEST_CASE("ggml_d3d12: small-op rules") {
     CHECK(d3d12_ew_op(ggml_silu(ctx, tall)) == D3d12EwOp::None);
     ggml_free(ctx);
 }
+
+TEST_CASE("ggml_d3d12: FLASH_ATTN_EXT split planner and split emulation") {
+    // Prefill and many heads: one pass.
+    CHECK(d3d12_fa_split_len(512, 16, 6000) == 0);
+    CHECK(d3d12_fa_split_len(1, 16, 64) == 0); // too few keys to split
+    // Decode: 16 groups → about 16 splits, whole 64-key blocks.
+    const std::uint32_t sl = d3d12_fa_split_len(1, 16, 6000);
+    REQUIRE(sl > 0);
+    CHECK(sl % kD3d12FaThreads == 0);
+    const std::uint32_t nsplit = (6000 + sl - 1) / sl;
+    CHECK(nsplit >= 8);
+    CHECK(nsplit <= 16);
+
+    // The split + combine emulation equals the one-pass emulation.
+    std::mt19937 rng(3);
+    std::uniform_real_distribution<float> uni(-1.f, 1.f);
+    const int d = 128, n_head = 4, n_head_kv = 2, n_kv = 300, n_q = 2;
+    const std::size_t row = ggml_row_size(GGML_TYPE_Q8_0, d);
+    std::vector<float> qf(std::size_t(d) * n_head * n_q);
+    for (float& x : qf)
+        x = uni(rng);
+    std::vector<std::uint8_t> kq(row * n_head_kv * n_kv + 8), vq(kq.size());
+    for (auto* buf : {&kq, &vq}) {
+        std::vector<float> f(std::size_t(d) * n_head_kv * n_kv);
+        for (float& x : f)
+            x = uni(rng);
+        ggml_quantize_chunk(GGML_TYPE_Q8_0, f.data(), buf->data(), 0, n_head_kv * n_kv, d, nullptr);
+    }
+    std::vector<ggml_fp16_t> m(std::size_t(n_kv) * n_q);
+    for (int r = 0; r < n_q; ++r)
+        for (int i = 0; i < n_kv; ++i) // a fully masked stretch, so one split has nothing
+            m[r * n_kv + i] =
+                ggml_fp32_to_fp16((i >= 64 && i < 192) || i > n_kv - n_q + r ? -INFINITY : 0.f);
+    std::vector<float> sinks = {0.5f, -1.f, 2.f, 0.f};
+    D3d12FaParams p;
+    p.n_kv = n_kv;
+    p.d = d;
+    p.n_q = n_q;
+    p.n_head = n_head;
+    p.gqa = n_head / n_head_kv;
+    p.nbq1 = d * n_head * 4;
+    p.nbq2 = d * 4;
+    p.nbk1 = p.nbv1 = static_cast<std::uint32_t>(row * n_head_kv);
+    p.nbk2 = p.nbv2 = static_cast<std::uint32_t>(row);
+    p.has_mask = 1;
+    p.nbm1 = n_kv * 2;
+    p.has_sinks = 1;
+    p.kv_q8 = 1;
+    d3d12_fa_scales(0.1f, 0.f, &p.scale_bits, &p.softcap_bits);
+    std::vector<float> one(std::size_t(d) * n_head * n_q), split(one.size());
+    const auto* qb = reinterpret_cast<const std::uint8_t*>(qf.data());
+    const auto* mb = reinterpret_cast<const std::uint8_t*>(m.data());
+    d3d12_fa_emulate(p, qb, kq.data(), vq.data(), mb, sinks.data(), one.data());
+    p.split_len = 64; // 5 splits, one entirely masked
+    d3d12_fa_emulate(p, qb, kq.data(), vq.data(), mb, sinks.data(), split.data());
+    double md = 0, mr = 0;
+    for (std::size_t i = 0; i < one.size(); ++i) {
+        mr = std::max(mr, std::fabs(static_cast<double>(one[i])));
+        md = std::max(md, std::fabs(static_cast<double>(one[i]) - split[i]));
+    }
+    CHECK(md / mr < 1e-5);
+}

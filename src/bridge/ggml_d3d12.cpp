@@ -423,9 +423,31 @@ void d3d12_fa_scales(float scale, float logit_softcap, std::uint32_t* scale_bits
     std::memcpy(softcap_bits, &logit_softcap, 4);
 }
 
+std::uint32_t d3d12_fa_split_len(std::int64_t n_q, std::int64_t n_head, std::int64_t n_kv) {
+    constexpr std::int64_t kWantGroups = 256; // a few per CU on Series X
+    const std::int64_t groups = n_q * n_head;
+    if (groups >= kWantGroups || n_kv < 2 * kD3d12FaThreads)
+        return 0;
+    const std::int64_t blocks = (n_kv + kD3d12FaThreads - 1) / kD3d12FaThreads;
+    std::int64_t nsplit = std::min<std::int64_t>((kWantGroups + groups - 1) / groups, blocks);
+    nsplit = std::min<std::int64_t>(nsplit, kD3d12MaxGroups);
+    const std::int64_t per = (blocks + nsplit - 1) / nsplit; // blocks per split
+    return static_cast<std::uint32_t>(per * kD3d12FaThreads);
+}
+
+std::size_t d3d12_fa_partial_bytes(const D3d12FaParams& p) {
+    if (!p.split_len)
+        return 0;
+    const std::size_t nsplit = (p.n_kv + p.split_len - 1) / p.split_len;
+    return std::size_t(p.n_q) * p.n_head * nsplit * (p.d + 2) * 4;
+}
+
 void d3d12_fa_emulate(const D3d12FaParams& p, const std::uint8_t* q, const std::uint8_t* k,
                       const std::uint8_t* v, const std::uint8_t* mask, const float* sinks,
                       float* out) {
+    const std::uint32_t nsplit = p.split_len ? (p.n_kv + p.split_len - 1) / p.split_len : 1;
+    // Per (row, split): M, S, acc — what the GPU's partial buffer holds.
+    std::vector<float> parts(p.split_len ? d3d12_fa_partial_bytes(p) / 4 : 0);
     constexpr std::uint32_t T = kD3d12FaThreads;
     const float NEG = -std::numeric_limits<float>::infinity();
     auto rd16 = [](const std::uint8_t* b, std::uint32_t a) {
@@ -446,68 +468,105 @@ void d3d12_fa_emulate(const D3d12FaParams& p, const std::uint8_t* q, const std::
             std::fill(acc.begin(), acc.end(), 0.f);
             float M = NEG, S = 0.f;
             const std::uint32_t mrow = p.m_off + iq * p.nbm1 + (h % p.mask_ne2) * p.nbm2;
-            for (std::uint32_t kb = 0; kb < p.n_kv; kb += T) {
-                for (std::uint32_t t = 0; t < T; ++t) {
-                    const std::uint32_t ic = kb + t;
-                    s[t] = NEG;
-                    if (ic >= p.n_kv)
-                        continue;
-                    const float mv = p.has_mask ? rd16(mask, mrow + 2u * ic) : 0.f;
-                    if (mv == NEG)
-                        continue;
-                    const std::uint32_t base = p.k_off + hk * p.nbk2 + ic * p.nbk1;
-                    float dot = 0.f;
-                    if (p.kv_q8) {
-                        for (std::uint32_t b = 0; b < d / 32u; ++b) {
-                            const std::uint32_t a = base + b * 34u;
-                            float part = 0.f;
-                            for (std::uint32_t e = 0; e < 32u; ++e)
-                                part += qs[b * 32u + e] *
-                                        static_cast<float>(static_cast<std::int8_t>(k[a + 2u + e]));
-                            dot += rd16(k, a) * part;
-                        }
-                    } else {
-                        for (std::uint32_t e = 0; e < d; ++e)
-                            dot += qs[e] * rd16(k, base + 2u * e);
-                    }
-                    float x = dot * scale;
-                    if (softcap != 0.f)
-                        x = softcap * std::tanh(x);
-                    s[t] = x + mv;
+            for (std::uint32_t z = 0; z < nsplit; ++z) {
+                const std::uint32_t kv0 = p.split_len ? z * p.split_len : 0;
+                const std::uint32_t kv1 =
+                    p.split_len ? std::min(p.n_kv, kv0 + p.split_len) : p.n_kv;
+                if (p.split_len) {
+                    std::fill(acc.begin(), acc.end(), 0.f);
+                    M = NEG;
+                    S = 0.f;
                 }
-                float bm = NEG;
-                for (std::uint32_t t = 0; t < T; ++t)
-                    bm = std::max(bm, s[t]);
-                const float Mn = std::max(M, bm);
-                if (Mn == NEG)
-                    continue;
-                float bs = 0.f;
-                for (std::uint32_t t = 0; t < T; ++t) {
-                    ps[t] = s[t] == NEG ? 0.f : std::exp(s[t] - Mn);
-                    bs += ps[t];
-                }
-                const float ms = M == NEG ? 0.f : std::exp(M - Mn);
-                S = S * ms + bs;
-                M = Mn;
-                for (float& a : acc)
-                    a *= ms;
-                const std::uint32_t nk = std::min(T, p.n_kv - kb);
-                for (std::uint32_t t = 0; t < nk; ++t) {
-                    if (ps[t] == 0.f)
-                        continue;
-                    const std::uint32_t vrow = p.v_off + hk * p.nbv2 + (kb + t) * p.nbv1;
-                    for (std::uint32_t e = 0; e < d; ++e) {
-                        float val;
+                for (std::uint32_t kb = kv0; kb < kv1; kb += T) {
+                    for (std::uint32_t t = 0; t < T; ++t) {
+                        const std::uint32_t ic = kb + t;
+                        s[t] = NEG;
+                        if (ic >= kv1)
+                            continue;
+                        const float mv = p.has_mask ? rd16(mask, mrow + 2u * ic) : 0.f;
+                        if (mv == NEG)
+                            continue;
+                        const std::uint32_t base = p.k_off + hk * p.nbk2 + ic * p.nbk1;
+                        float dot = 0.f;
                         if (p.kv_q8) {
-                            const std::uint32_t a = vrow + (e >> 5) * 34u;
-                            val = rd16(v, a) * static_cast<float>(
-                                                   static_cast<std::int8_t>(v[a + 2u + (e & 31u)]));
+                            for (std::uint32_t b = 0; b < d / 32u; ++b) {
+                                const std::uint32_t a = base + b * 34u;
+                                float part = 0.f;
+                                for (std::uint32_t e = 0; e < 32u; ++e)
+                                    part +=
+                                        qs[b * 32u + e] *
+                                        static_cast<float>(static_cast<std::int8_t>(k[a + 2u + e]));
+                                dot += rd16(k, a) * part;
+                            }
                         } else {
-                            val = rd16(v, vrow + 2u * e);
+                            for (std::uint32_t e = 0; e < d; ++e)
+                                dot += qs[e] * rd16(k, base + 2u * e);
                         }
-                        acc[e] += ps[t] * val;
+                        float x = dot * scale;
+                        if (softcap != 0.f)
+                            x = softcap * std::tanh(x);
+                        s[t] = x + mv;
+                    }
+                    float bm = NEG;
+                    for (std::uint32_t t = 0; t < T; ++t)
+                        bm = std::max(bm, s[t]);
+                    const float Mn = std::max(M, bm);
+                    if (Mn == NEG)
+                        continue;
+                    float bs = 0.f;
+                    for (std::uint32_t t = 0; t < T; ++t) {
+                        ps[t] = s[t] == NEG ? 0.f : std::exp(s[t] - Mn);
+                        bs += ps[t];
+                    }
+                    const float ms = M == NEG ? 0.f : std::exp(M - Mn);
+                    S = S * ms + bs;
+                    M = Mn;
+                    for (float& a : acc)
+                        a *= ms;
+                    const std::uint32_t nk = std::min(T, kv1 - kb);
+                    for (std::uint32_t t = 0; t < nk; ++t) {
+                        if (ps[t] == 0.f)
+                            continue;
+                        const std::uint32_t vrow = p.v_off + hk * p.nbv2 + (kb + t) * p.nbv1;
+                        for (std::uint32_t e = 0; e < d; ++e) {
+                            float val;
+                            if (p.kv_q8) {
+                                const std::uint32_t a = vrow + (e >> 5) * 34u;
+                                val = rd16(v, a) * static_cast<float>(static_cast<std::int8_t>(
+                                                       v[a + 2u + (e & 31u)]));
+                            } else {
+                                val = rd16(v, vrow + 2u * e);
+                            }
+                            acc[e] += ps[t] * val;
+                        }
                     }
                 }
+                if (p.split_len) {
+                    float* pp =
+                        parts.data() + ((std::size_t(iq) * p.n_head + h) * nsplit + z) * (d + 2);
+                    pp[0] = M;
+                    pp[1] = S;
+                    std::copy(acc.begin(), acc.end(), pp + 2);
+                }
+            } // splits
+            if (p.split_len) { // CSCombine
+                const float* rp =
+                    parts.data() + (std::size_t(iq) * p.n_head + h) * nsplit * (d + 2);
+                M = NEG;
+                for (std::uint32_t z = 0; z < nsplit; ++z)
+                    M = std::max(M, rp[z * (d + 2)]);
+                S = 0.f;
+                std::fill(acc.begin(), acc.end(), 0.f);
+                if (M != NEG)
+                    for (std::uint32_t z = 0; z < nsplit; ++z) {
+                        const float* pz = rp + z * (d + 2);
+                        if (pz[0] == NEG)
+                            continue;
+                        const float w = std::exp(pz[0] - M);
+                        S += pz[1] * w;
+                        for (std::uint32_t e = 0; e < d; ++e)
+                            acc[e] += pz[2 + e] * w;
+                    }
             }
             if (p.has_sinks) {
                 const float sk = sinks[h];
@@ -979,6 +1038,10 @@ bool ggml_d3d12_register() {
 
 ggml_backend_buffer_type_t ggml_d3d12_weights_buft() {
     return nullptr;
+}
+
+const char* ggml_d3d12_crumb() {
+    return "";
 }
 
 bool ggml_d3d12_take_stats(D3d12PhaseStats* out) {
@@ -1727,6 +1790,19 @@ const ggml_tensor* base_of(const ggml_tensor* t) {
     return t;
 }
 
+// Fork: breadcrumb for crash reports (one inference thread at a time).
+char g_crumb[192] = "";
+void crumb(const char* where, int i, const ggml_tensor* t) {
+    std::snprintf(
+        g_crumb, sizeof(g_crumb), "%s %d %s '%s' [%lld,%lld,%lld,%lld] src1=%s", where, i,
+        t ? ggml_op_desc(t) : "-", t ? t->name : "", t ? static_cast<long long>(t->ne[0]) : 0LL,
+        t ? static_cast<long long>(t->ne[1]) : 0LL, t ? static_cast<long long>(t->ne[2]) : 0LL,
+        t ? static_cast<long long>(t->ne[3]) : 0LL,
+        t && t->src[1]
+            ? (t->src[1]->buffer ? ggml_backend_buffer_name(t->src[1]->buffer) : "unalloc")
+            : "-");
+}
+
 // --- Fork: FLASH_ATTN_EXT ---
 
 D3d12FlashAttnDesc fa_desc_of(const ggml_tensor* node) {
@@ -2282,9 +2358,11 @@ bool submit_ops(Gpu& g, const std::vector<Op>& ops) {
                 cl->ResourceBarrier(1, &uav);
                 cl->EndQuery(g.dts.Get(), D3D12_QUERY_TYPE_TIMESTAMP, ++stamp);
             };
+            int op_i = 0;
             for (const Op& op : ops) {
                 const ggml_tensor* node = op.node;
                 const ggml_tensor* w = node->src[0];
+                crumb(op.quant_x ? "submit-quant" : "submit", op_i++, node);
                 if (op.barrier && !dt) // with dt every dispatch is already followed by one
                     cl->ResourceBarrier(1, &uav);
                 if (op.quant_x) {
@@ -2592,7 +2670,9 @@ ggml_status backend_graph_compute(ggml_backend_t, ggml_cgraph* cgraph) {
         used = 0;
         return ok;
     };
+    int node_i = 0;
     for (const ggml_tensor* node : mm) {
+        crumb("graph", node_i++, node);
         if (node->op == GGML_OP_FLASH_ATTN_EXT) {
             // Fork: reads its sources in place; one produced earlier in this
             // submission must be finished first.
@@ -2713,6 +2793,10 @@ ggml_status backend_graph_compute(ggml_backend_t, ggml_cgraph* cgraph) {
 
 } // namespace
 
+const char* ggml_d3d12_crumb() {
+    return g_crumb;
+}
+
 bool ggml_d3d12_take_stats(D3d12PhaseStats* out) {
     Gpu& g = gpu();
     std::lock_guard<std::mutex> lock(g.mu);
@@ -2795,6 +2879,7 @@ ggml_backend_buffer_type_t dev_buffer_type(ggml_backend_dev_t) {
 }
 
 bool dev_supports_op(ggml_backend_dev_t, const ggml_tensor* op) {
+    crumb("supports", 0, op);
     switch (op->op) {
     case GGML_OP_NONE:
     case GGML_OP_RESHAPE:

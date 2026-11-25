@@ -156,9 +156,18 @@ struct D3d12FaParams {
     std::uint32_t nbk2 = 0, nbv1 = 0, nbv2 = 0, nbm1 = 0;
     std::uint32_t nbm2 = 0, mask_ne2 = 1, scale_bits = 0, softcap_bits = 0;
     std::uint32_t has_mask = 0, has_sinks = 0, kv_q8 = 0, q_off = 0;
-    std::uint32_t k_off = 0, v_off = 0, m_off = 0, pad0 = 0;
+    std::uint32_t k_off = 0, v_off = 0, m_off = 0;
+    std::uint32_t split_len = 0; // 0 = one pass; else keys per split (see below)
 };
 static_assert(sizeof(D3d12FaParams) == 24 * 4, "FaParams is 24 root constants");
+
+// Decode (few query rows) leaves most of the GPU idle with one group per
+// (query, head): split the keys across groups instead, each writing partials
+// that a second dispatch (CSCombine) merges. Returns keys per split (a
+// multiple of kD3d12FaThreads), or 0 for a single pass.
+std::uint32_t d3d12_fa_split_len(std::int64_t n_q, std::int64_t n_head, std::int64_t n_kv);
+// Bytes of partials a split dispatch writes: [M, S, acc[d]] per (row, split).
+std::size_t d3d12_fa_partial_bytes(const D3d12FaParams& p);
 
 // scale / softcap from FLASH_ATTN_EXT op_params as the kernel wants them
 // (scale divided by softcap when softcap is set, as ggml-cpu does).
@@ -167,7 +176,8 @@ void d3d12_fa_scales(float scale, float logit_softcap, std::uint32_t* scale_bits
 
 // Host emulation of shaders/ggml_d3d12_fa.hlsl, block for block. q/k/v/mask
 // are the bytes the root UAVs address (each view starts p.*_off bytes in);
-// out is [d, n_head, n_q] contiguous.
+// out is [d, n_head, n_q] contiguous. With p.split_len set it runs the split
+// pass and the combine, as the GPU does.
 void d3d12_fa_emulate(const D3d12FaParams& p, const std::uint8_t* q, const std::uint8_t* k,
                       const std::uint8_t* v, const std::uint8_t* mask, const float* sinks,
                       float* out);
@@ -212,6 +222,10 @@ void d3d12_quant_q8k_emulate(const float* x, std::size_t x_stride, int k, int nr
 // tied embedding (no output.weight) of a type GET_ROWS supports, so the one
 // copy serves both the input lookup and the lm_head.
 bool d3d12_place_tied_embedding(ggml_type embd_type, bool has_output_weight);
+
+// Fork: the last place the backend was (op and tensor), for crash reports.
+// Empty off Windows.
+const char* ggml_d3d12_crumb();
 
 // The D3D12_Weights buffer type, for llama's tensor_buft_overrides. Null
 // until ggml_d3d12_register() succeeds (always on non-Windows).

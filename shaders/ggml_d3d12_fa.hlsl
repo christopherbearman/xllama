@@ -43,7 +43,9 @@ cbuffer FaParams : register(b0) {
     uint k_off;        // rounds the address down to 4 bytes and passes the rest
     uint v_off;
     uint m_off;
-    uint pad0;
+    uint split_len;    // 0 = one pass. Else keys per split (multiple of 64): gid.z
+                       // picks a split, O receives unnormalized partials
+                       // [M, S, acc[d]] per (row, split), CSCombine merges them.
 };
 
 RWByteAddressBuffer O : register(u0);
@@ -178,10 +180,15 @@ void CSMain(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
 
     GroupMemoryBarrierWithGroupSync(); // qs ready
 
-    for (uint kb = 0u; kb < n_kv; kb += FA_BLOCK) {
+    uint kv0 = 0u, kv1 = n_kv;
+    if (split_len != 0u) {
+        kv0 = gid.z * split_len;
+        kv1 = min(n_kv, kv0 + split_len);
+    }
+    for (uint kb = kv0; kb < kv1; kb += FA_BLOCK) {
         const uint ic = kb + tid;
         float s = NEG;
-        if (ic < n_kv) {
+        if (ic < kv1) {
             float mv = 0.0;
             if (has_mask != 0u)
                 mv = f16tof32(ldm16(mrow + 2u * ic));
@@ -210,7 +217,7 @@ void CSMain(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
         [unroll]
         for (uint j2 = 0u; j2 < FA_MAX_DPT; ++j2)
             acc[j2] *= ms;
-        const uint nk = min((uint)FA_BLOCK, n_kv - kb);
+        const uint nk = min((uint)FA_BLOCK, kv1 - kb);
         for (uint t = 0u; t < nk; ++t) {
             const float pt = ps[t];
             if (pt == 0.0)
@@ -223,6 +230,23 @@ void CSMain(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
             }
         }
         GroupMemoryBarrierWithGroupSync(); // ps / red free for the next block
+    }
+
+    if (split_len != 0u) {
+        // Decode: this group covered one split of the keys; leave the merge
+        // (and the sinks) to CSCombine.
+        const uint nsplit = (n_kv + split_len - 1u) / split_len;
+        const uint pbase = ((iq * n_head + h) * nsplit + gid.z) * (d + 2u) * 4u;
+        if (tid == 0u) {
+            O.Store(pbase, asuint(M));
+            O.Store(pbase + 4u, asuint(S));
+        }
+        [unroll]
+        for (uint jp = 0u; jp < FA_MAX_DPT; ++jp) {
+            if (jp < dpt)
+                O.Store(pbase + (2u + tid + FA_THREADS * jp) * 4u, asuint(acc[jp]));
+        }
+        return;
     }
 
     if (has_sinks != 0u) {
@@ -241,6 +265,61 @@ void CSMain(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
 
     const float inv = S == 0.0 ? 0.0 : 1.0 / S;
     const uint row = iq * n_head + h; // dst = permute(0, 2, 1, 3): [d, n_head, n_q]
+    [unroll]
+    for (uint j5 = 0u; j5 < FA_MAX_DPT; ++j5) {
+        if (j5 < dpt)
+            O.Store((row * d + tid + FA_THREADS * j5) * 4u, asuint(acc[j5] * inv));
+    }
+}
+
+// Merge the split partials (bound as Qb) into the output: the same rescaling
+// the online softmax does between blocks, then the sinks, then 1/S.
+[numthreads(FA_THREADS, 1, 1)]
+void CSCombine(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
+    const uint iq = gid.x;
+    const uint h = gid.y;
+    const float NEG = neg_inf();
+    const uint dpt = d / FA_THREADS;
+    const uint nsplit = (n_kv + split_len - 1u) / split_len;
+    const uint rbase = (iq * n_head + h) * nsplit * (d + 2u) * 4u;
+    float M = NEG;
+    for (uint z = 0u; z < nsplit; ++z)
+        M = max(M, asfloat(Qb.Load(rbase + z * (d + 2u) * 4u)));
+    float S = 0.0;
+    float acc[FA_MAX_DPT];
+    [unroll]
+    for (uint j = 0u; j < FA_MAX_DPT; ++j)
+        acc[j] = 0.0;
+    if (M != NEG) {
+        for (uint z2 = 0u; z2 < nsplit; ++z2) {
+            const uint pb = rbase + z2 * (d + 2u) * 4u;
+            const float mz = asfloat(Qb.Load(pb));
+            if (mz == NEG)
+                continue;
+            const float w = exp(mz - M);
+            S += asfloat(Qb.Load(pb + 4u)) * w;
+            [unroll]
+            for (uint j2 = 0u; j2 < FA_MAX_DPT; ++j2) {
+                if (j2 < dpt)
+                    acc[j2] += asfloat(Qb.Load(pb + (2u + tid + FA_THREADS * j2) * 4u)) * w;
+            }
+        }
+    }
+    if (has_sinks != 0u) {
+        const float sk = asfloat(Sb.Load(h * 4u));
+        if (sk > M) {
+            const float ms = (M == NEG) ? 0.0 : exp(M - sk);
+            [unroll]
+            for (uint j4 = 0u; j4 < FA_MAX_DPT; ++j4)
+                acc[j4] *= ms;
+            S = S * ms + 1.0;
+            M = sk;
+        } else {
+            S = S + exp(sk - M);
+        }
+    }
+    const float inv = S == 0.0 ? 0.0 : 1.0 / S;
+    const uint row = iq * n_head + h;
     [unroll]
     for (uint j5 = 0u; j5 < FA_MAX_DPT; ++j5) {
         if (j5 < dpt)

@@ -13,6 +13,10 @@
 // pch.h must be first: it includes <unknwn.h> before winrt/base.h (COM IUnknown
 // guard). Sockets + Json are the WinRT namespaces pch.h does not already pull in.
 #include "pch.h"
+
+#include <eh.h>
+
+#include "xllama/ggml_d3d12.h"
 #include <atomic>
 #include <utility>
 #include <winrt/Windows.ApplicationModel.h>
@@ -1396,6 +1400,12 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
             const bool streamed_cap = r.n_eval >= gp.n_predict;
             sse->finish(streamed_cap ? L"length" : L"stop", r.n_prompt, r.n_eval);
             status = "200 OK";
+        } catch (const std::exception& e) {
+            // Fork: name it (and where the GPU backend was) in the log and the stream.
+            log_output(std::string("[xllama] api: stream failed: ") + e.what() +
+                       " (d3d12: " + ::xllama::ggml_d3d12_crumb() + ")\n");
+            status = "500 Internal Server Error";
+            sse->write_error(std::string("generation failed: ") + e.what());
         } catch (...) {
             // Generation or JSON serialization failed after the head was sent.
             // write_error is noexcept; the empty body keeps the outer handler
@@ -2546,6 +2556,26 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
             auto ticket = activity().begin("chat");
             const char* status = "200 OK";
             std::string json;
+            // Fork: a hardware exception (access violation) in the backend
+            // becomes a std::runtime_error naming its code and address, so it
+            // is logged with the backend's breadcrumb instead of reading as
+            // "malformed request body".
+            const auto prev_se = _set_se_translator([](unsigned int code, EXCEPTION_POINTERS* ep) {
+                char b[96];
+                std::snprintf(b, sizeof(b), "SEH 0x%08X at +0x%llx", code,
+                              ep ? static_cast<unsigned long long>(
+                                       reinterpret_cast<std::uintptr_t>(
+                                           ep->ExceptionRecord->ExceptionAddress) -
+                                       reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)))
+                                 : 0ull);
+                throw std::runtime_error(b);
+            });
+            struct RestoreSe {
+                _se_translator_function prev;
+                ~RestoreSe() {
+                    _set_se_translator(prev);
+                }
+            } restore_se{prev_se};
             try {
                 json = handle_chat_locked(chat_body, status, ticket, socket, stream);
             } catch (const std::bad_alloc&) {
@@ -2560,7 +2590,8 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
                 status = "400 Bad Request";
                 json = error_json("malformed request body: " + winrt::to_string(e.message()));
             } catch (const std::exception& e) {
-                log_output(std::string("[xllama] api: chat failed: ") + e.what() + "\n");
+                log_output(std::string("[xllama] api: chat failed: ") + e.what() +
+                           " (d3d12: " + ::xllama::ggml_d3d12_crumb() + ")\n");
                 status = "500 Internal Server Error";
                 json = error_json(std::string("internal error: ") + e.what());
             } catch (...) {
