@@ -189,8 +189,18 @@ but have **no Series S bench**. Host smoke is not a console claim. Measurement
 harness: [console-validation-runbook.md](./console-validation-runbook.md)
 (Campaign T3 — new GGUF catalogue candidate).
 
-None. The 2026-09-30 gates (`2026-09-30-catalogue-gates`) closed every row:
+The 2026-09-30 gates (`2026-09-30-catalogue-gates`) closed every upstream row:
 `phi4-mini` moved to §A1, MiniCPM5-1B and Gemma-3-1B to §F.
+
+The Series X fork added three Qwen3.5 models (2026-11-20). They have no Series S
+bench; the Series X figures and their caveats are in
+[series-x-fork.md](./series-x-fork.md).
+
+| Model               | Catalogue        | Params | Quant           | Backend           | Role   | n_ctx | Series X note                                 |
+| ------------------- | ---------------- | ------ | --------------- | ----------------- | ------ | ----- | --------------------------------------------- |
+| Qwen3.5-4B          | `qwen35-4b`      | 4B     | Q4_K_M          | llama.cpp + D3D12 | coding | 8192  | ~16 tok/s decode, q8_0 KV                     |
+| Qwen3.5-9B          | `qwen35-9b`      | 9B     | IQ3_S 3.15 bpw  | llama.cpp + D3D12 | coding | 8192  | IQ3_XXS/IQ4_XS kernels, q8_0 KV               |
+| Qwen3.5-9B (IQ4_XS) | `qwen35-9b-plus` | 9B     | IQ4_XS 3.60 bpw | llama.cpp + D3D12 | coding | 8192  | ~11.4 tok/s at 2k tokens, about 4.4 GB in use |
 
 ---
 

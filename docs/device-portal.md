@@ -211,6 +211,33 @@ CSRF token as with any other state-changing call — the requirement is verified
 for POST/DELETE and assumed here rather than measured. Signing in also moves the
 package's `LocalState` (`dml-metacommands-runbook.md` has the consequences).
 
+## REST API: Driving the app from a browser or script (Series X, 2026-11)
+
+These calls let a script change a LocalState switch, restart the app and read
+its performance without touching the console. They were used from a browser
+tab on the portal's own origin.
+
+| Job                         | Call                                                                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Upload a file to LocalState | `POST /api/filesystem/apps/file?knownfolderid=LocalAppData&packagefullname=<PFN>&path=\LocalState` (multipart, field `file`) |
+| Delete a LocalState file    | `DELETE` the same URL with `&filename=<name>`                                                                                |
+| List LocalState             | `GET /api/filesystem/apps/files?knownfolderid=LocalAppData&packagefullname=<PFN>&path=\LocalState`                           |
+| Stop the app                | `DELETE /api/taskmanager/app?package=<base64 PFN>`                                                                           |
+| Start the app               | `POST /api/taskmanager/app?appid=<base64 PackageRelativeId>&package=<base64 PFN>`                                            |
+| CPU, GPU and memory load    | `GET /api/resourcemanager/systemperf`                                                                                        |
+| Per-process working set     | `GET /api/resourcemanager/processes`                                                                                         |
+| Crash dumps                 | `GET /api/debug/dump/usermode/dumps`                                                                                         |
+
+- **Every `POST` and `DELETE` needs `X-CSRF-Token`**, set to the value of the
+  `CSRF-Token` cookie; without it the portal answers 403. `GET` needs none.
+- **The PFN and relative id** come from `GET /api/app/packagemanager/packages`
+  (`PackageFullName`, `PackageRelativeId`); re-read them after each install.
+- **GPU engines:** `GPUData.AvailableAdapters[0].EnginesUtilization` lists 7
+  engines. The app's D3D12 compute work shows on index 5; the portal's graph
+  only draws engines 0–3, so it looks idle while the GPU is busy.
+- **Crash dumps came back empty** for access violations the app caught itself
+  (`/EHa`); read `xllama.log` instead.
+
 ## Lifecycle gotchas (verified on console, 2026-07-07)
 
 Five non-obvious behaviours of Device Portal + UWP package lifecycle that have

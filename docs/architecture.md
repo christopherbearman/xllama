@@ -226,6 +226,15 @@ excludes the DirectML EP (continuous decoding is CPU-only, verified — the reus
 turn produces zero cached tokens on DML). It is **not** gated by backend — GGUF
 KV-reuse is on.
 
+### Hybrid models: recurrent checkpoint (fork)
+
+Qwen3.5 and LFM2 keep a recurrent state that cannot be rewound, so a prompt that
+differs from the resident text anywhere before its end used to mean a full
+re-prefill. Each prefill now saves that state (llama.cpp's partial sequence
+state) 16 tokens before the prompt's end; a later prompt that still matches
+those tokens restores it, trims the attention KV and prefills only the rest.
+Measured figures: [series-x-fork.md](series-x-fork.md).
+
 ### KV snapshot pool (`KvStore`)
 
 Leaving a conversation writes its KV to `LocalState\kv\<id>.kv` and the first
@@ -1041,15 +1050,22 @@ Machine-readable output: `SPEC_STATS` line on stderr for bench scripts.
 
 `shaders/` contains HLSL compute shaders and their AOT-compiled DXIL headers:
 
-| Shader                                         | Purpose                                             | Output                                      |
-| ---------------------------------------------- | --------------------------------------------------- | ------------------------------------------- |
-| `gpubw_stream.hlsl`                            | GPU STREAM read (~1 GiB VRAM)                       | `generated/gpubw_stream_dxil.h`             |
-| `gpugemv_q4k.hlsl`                             | Naive Q4_K GEMV                                     | `generated/gpugemv_q4k_dxil.h`              |
-| `gpugemv_q4k_wave32.hlsl`                      | Wave32-optimized Q4_K GEMV                          | `generated/gpugemv_q4k_wave32_dxil.h`       |
-| `gpugemv_q4k_rows.hlsl`                        | Multi-row Q4_K GEMV (H6.3; also the gpustep kernel) | `generated/gpugemv_q4k_rows_dxil.h`         |
-| `gpugemv_q4k_dot4.hlsl`                        | Multi-row Q4_K × q8 GEMV, cs_6_4 (H6.3)             | `generated/gpugemv_q4k_dot4_dxil.h`         |
-| `ggml_d3d12_mmv_q4_0.hlsl` / `_q4_k` / `_q6_k` | d3d12 backend MUL_MAT, q8 integer dot, cs_6_4       | `generated/ggml_d3d12_mmv_*_dxil.h`         |
-| `ggml_d3d12_get_rows_q6_k.hlsl`                | d3d12 backend GET_ROWS (tied embedding), cs_6_4     | `generated/ggml_d3d12_get_rows_q6_k_dxil.h` |
+| Shader                                              | Purpose                                                                          | Output                                      |
+| --------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------- |
+| `gpubw_stream.hlsl`                                 | GPU STREAM read (~1 GiB VRAM)                                                    | `generated/gpubw_stream_dxil.h`             |
+| `gpugemv_q4k.hlsl`                                  | Naive Q4_K GEMV                                                                  | `generated/gpugemv_q4k_dxil.h`              |
+| `gpugemv_q4k_wave32.hlsl`                           | Wave32-optimized Q4_K GEMV                                                       | `generated/gpugemv_q4k_wave32_dxil.h`       |
+| `gpugemv_q4k_rows.hlsl`                             | Multi-row Q4_K GEMV (H6.3; also the gpustep kernel)                              | `generated/gpugemv_q4k_rows_dxil.h`         |
+| `gpugemv_q4k_dot4.hlsl`                             | Multi-row Q4_K × q8 GEMV, cs_6_4 (H6.3)                                          | `generated/gpugemv_q4k_dot4_dxil.h`         |
+| `ggml_d3d12_mmv_q4_0.hlsl` / `_q4_k` / `_q6_k`      | d3d12 backend MUL_MAT, q8 integer dot, cs_6_4                                    | `generated/ggml_d3d12_mmv_*_dxil.h`         |
+| `ggml_d3d12_get_rows_q6_k.hlsl`                     | d3d12 backend GET_ROWS (tied embedding), cs_6_4                                  | `generated/ggml_d3d12_get_rows_q6_k_dxil.h` |
+| `ggml_d3d12_mmv_iq3_xxs.hlsl` / `_iq4_xs` / `_q5_k` | Fork: more MUL_MAT weight types                                                  | `generated/ggml_d3d12_mmv_*_dxil.h` (CI)    |
+| `ggml_d3d12_mmt_*.hlsl`                             | Fork: 8-column tiled MUL_MAT for prefill                                         | `generated/ggml_d3d12_mmt_*_dxil.h` (CI)    |
+| `ggml_d3d12_fa.hlsl`                                | Fork: FLASH_ATTN_EXT (F16/Q8_0 KV)                                               | `generated/ggml_d3d12_fa_dxil.h` (CI)       |
+| `ggml_d3d12_ew.hlsl`                                | Fork: ADD, MUL, SILU, SWIGLU, RMS_NORM, q8_K quantize (one blob per entry point) | `generated/ggml_d3d12_ew_*_dxil.h` (CI)     |
+
+The fork's shaders are compiled in CI by `scripts/compile-fork-shaders.py`
+(Windows SDK dxc); see [series-x-fork.md](series-x-fork.md).
 
 Compile scripts: `scripts/compile-gpubw-shader.sh`,
 `scripts/compile-gpugemv-shader.sh` (dxc → binary → C header; takes per-target

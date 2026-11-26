@@ -863,11 +863,11 @@ async function autoCheck(reply) {
 }
 
 const PATCH_RULES = `Fix every problem. Reply ONLY with SEARCH/REPLACE patches: no complete file and no explanation. Write each change exactly like this:
-<<<<<<< SEARCH
+${'<'.repeat(7)} SEARCH
 existing lines copied exactly from the page
 =======
 the new lines that replace them
->>>>>>> REPLACE
+${'>'.repeat(7)} REPLACE
 Rules: copy the SEARCH lines exactly as they appear in the page (same spelling and indentation); keep each SEARCH to a few lines so it matches only one place; use as many blocks as you need; to add new code, SEARCH for a nearby existing line and REPLACE it with that same line plus the new code.`;
 
 // Apply SEARCH/REPLACE blocks to |page|. Exact text first; otherwise the same
@@ -1024,8 +1024,8 @@ $("#o-check").onchange = () => { settings.autoCheck = $("#o-check").checked; LS.
 $("#s-auto").onchange = () => { settings.autoContinue = $("#s-auto").checked; LS.set("xa.settings", settings); };
 $("#s-max").onchange = () => { settings.max_tokens = Math.max(64, Math.min(8192, +$("#s-max").value || 2048)); LS.set("xa.settings", settings); };
 $("#s-key-go").onclick = async () => {
-  try { const r = await fetch(API + "/v1/config/web-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: $("#s-key").value.trim() }) )XUI"
-    R"XUI(}); const j = await r.json(); $("#s-key-st").textContent = "Saved. Provider: " + (j.provider || "?"); $("#s-key").value = ""; poll(); }
+  try { const r = await fetch(API + "/v1/config/web-search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: $("#s-key")XUI"
+    R"XUI().value.trim() }) }); const j = await r.json(); $("#s-key-st").textContent = "Saved. Provider: " + (j.provider || "?"); $("#s-key").value = ""; poll(); }
   catch { $("#s-key-st").textContent = "Couldn't reach the Xbox."; }
 };
 $("#s-pull-go").onclick = async () => {

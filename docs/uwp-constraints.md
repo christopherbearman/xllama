@@ -31,6 +31,12 @@ Platform limitations relevant to running LLM inference on Xbox Series S consoles
 
 **Impact**: Minimal. GGML and ORT GenAI kernels are pre-compiled C/C++. Only ggml-jit (experimental, unused here) is affected.
 
+**Unverified on Xbox (2026-11-26).** JIT-based emulators (Xenia, Dolphin) run as
+Developer Mode UWP packages, which suggests that `VirtualAllocFromApp` /
+`VirtualProtectFromApp` with the `codeGeneration` capability are allowed there.
+This project has not tested it; treat the statement above as the measured
+default, not a proven ban. See [research/xbox-other-os.md](research/xbox-other-os.md).
+
 ## 5. DirectML: Works on GPU (Headless) but Loses to CPU on Small Models
 
 **Background — pool estimate corrected (2026-07-07)**: the GPU budget measured
@@ -530,6 +536,11 @@ compositor + sequential-lifetime weights (~2.4 GB) inside the 3801 MB budget.
 correct results — no `887A0036`. The compositor shares the GPU: DEFAULT-heap
 GEMV reads 118.7 vs 144.4 GB/s headless and the round-trip p90 triples
 (155 vs 54 µs). Details: [gguf-gpu-decode.md](gguf-gpu-decode.md) D1 result.
+
+**No GPU watchdog (Series X, 2026-11-24).** A compute shader that never
+finishes kept the GPU at about 100 % until the app was stopped; there was no
+device reset and the waiting thread never returned. The d3d12 backend now gives
+up on a submission after 60 s and logs its ops ([series-x-fork.md](series-x-fork.md)).
 
 **Source note**: the GPU budget (3801 MB) is measured per-process via
 `QueryVideoMemoryInfo(LOCAL).Budget` with the package designated Game. The historical "~768 MB"

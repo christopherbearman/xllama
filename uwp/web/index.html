@@ -850,11 +850,11 @@ async function autoCheck(reply) {
 }
 
 const PATCH_RULES = `Fix every problem. Reply ONLY with SEARCH/REPLACE patches: no complete file and no explanation. Write each change exactly like this:
-<<<<<<< SEARCH
+${'<'.repeat(7)} SEARCH
 existing lines copied exactly from the page
 =======
 the new lines that replace them
->>>>>>> REPLACE
+${'>'.repeat(7)} REPLACE
 Rules: copy the SEARCH lines exactly as they appear in the page (same spelling and indentation); keep each SEARCH to a few lines so it matches only one place; use as many blocks as you need; to add new code, SEARCH for a nearby existing line and REPLACE it with that same line plus the new code.`;
 
 // Apply SEARCH/REPLACE blocks to |page|. Exact text first; otherwise the same
